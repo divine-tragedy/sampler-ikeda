@@ -1,0 +1,23 @@
+{
+  "liveServer.settings.port": 5500,
+  "liveServer.settings.root": "/",
+  "liveServer.settings.NoBrowser": false,
+  "liveServer.settings.CustomBrowser": "chrome",
+  "liveServer.settings.ignoreFiles": [
+    ".vscode/**",
+    "**/*.scss",
+    "**/*.sass",
+    "**/*.ts"
+  ],
+  "files.associations": {
+    "*.js": "javascript"
+  },
+  "javascript.suggest.completeFunctionCalls": true,
+  "editor.tabSize": 2,
+  "editor.insertSpaces": true,
+  "editor.formatOnSave": false,
+  "editor.wordWrap": "on",
+  "files.exclude": {
+    "**/.DS_Store": true
+  }
+}
