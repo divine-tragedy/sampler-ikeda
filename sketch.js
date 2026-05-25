@@ -69,7 +69,7 @@ async function stopRecording() {
 }
 
 function draw() {
-  background(255, 0, 0, 20); // slight trail effect
+  background(0, 20); // slight trail effect
 
   const spacing = 8;
   const time = frameCount * 0.01;
