@@ -1,10 +1,8 @@
 const instructions = [
-    "P5_GRAIN:",
+    "BODY INSTRUMENT:",
     "space to start/stop",
-    "mouse y controls rate",
-    "mouse x controls pitch",
-    "click/drag to set loop points",
-    "(drag right to left to reverse playback)",
-    "left & right arrows to change sample",
-    "scroll up and down to change grain size"
+    "left hand selects notes",
+    "right hand controls volume",
+    "hands close = sparse",
+    "hands far = more notes"
 ];

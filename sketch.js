@@ -1,105 +1,98 @@
 // Global state
 let cnv;
-let x1 = 0, x2 = 0, y1 = 0, y2 = 0;
-const bgColors = [100, 150, 250];
-let bgIndex = 0;
-const buffers = [buffer1, buffer2, buffer3, buffer4, buffer5]; // from buffers.js
-let bufferIndex = 0;
-let loopStart, loopEnd, pressedPoint, releasePoint;
 let isPlaying = false;
 let toneReady = false;
-let grainSize = 0.1;
-let overlap = 0.1;
-let volumeLevel = 1;
 let bodyVideo;
 let pose;
 let poseRunning = false;
+const scale = [
+  "C4", "Eb4", "F4", "G4", "Bb4",
+  "C5", "Eb5"
+];
 let bodyControls = {
   hasPose: false,
-  intensity: 0.15,
+  density: 0.25,
+  handDistance: 0.2,
   leftX: 0.5,
   leftY: 0.5,
   rightX: 0.5,
   rightY: 0.5,
   lastSeen: 0,
 };
+let currentNote = scale[0];
+let currentNoteIndex = 0;
+let currentVolume = -24;
+let currentDensity = 0.25;
+let pulseCounter = 0;
 
 // Microphone
 let recorder;
 let mic;
-let recordedBuffer;
 
-// MIDI
-let midiAccess;
-let midiInputs = [];
-
-// Tone.GrainPlayer — granular playback of the active buffer
-const player = new Tone.GrainPlayer(buffers[bufferIndex]);
+const synth = new Tone.PolySynth(Tone.Synth, {
+  oscillator: {
+    type: "sine"
+  },
+  envelope: {
+    attack: 1.5,
+    decay: 0.3,
+    sustain: 0.6,
+    release: 3
+  }
+});
+const reverb = new Tone.Reverb({
+  decay: 6,
+  wet: 0.6,
+});
 const fft = new Tone.FFT(64);
 const meter = new Tone.Meter();
-const outputGain = new Tone.Gain(volumeLevel);
-
-// Light reverb tail
-const reverb = new Tone.Reverb({
-  decay: 3,
-  preDelay: 0.25,
-  wet: 0.2,
-});
+const loop = new Tone.Loop((time) => {
+  playNote(time);
+}, "4n");
 
 function setup() {
   cnv = createCanvas(448 , 256);
   fullscreen(true);
-  cnv.mousePressed(getPressedPoint);
-  cnv.mouseReleased(getReleasePoint);
-  cnv.mouseWheel(trackPad);
-
-  player.loop = true;
-  player.playbackRate = 1;
-  player.overlap = overlap;
-  player.grainSize = grainSize;
-  outputGain.toDestination();
-  player.connect(fft);
-  player.connect(meter);
-  player.chain(reverb, outputGain);
-
-  pressedPoint = 0;
-  releasePoint = 1;
-  loopStart = 0;
-  loopEnd = 0;
 
   mic = new Tone.UserMedia();
   recorder = new Tone.Recorder();
+  mic.connect(recorder);
 
-  setupMIDI();
+  synth.connect(reverb);
+  synth.connect(fft);
+  synth.connect(meter);
+  reverb.toDestination();
+
   setupBodyTracking();
 }
 async function startRecording() {
   await initializeTone();
   await mic.open();
-  mic.connect(recorder);
   recorder.start();
   console.log("recording...");
 }
 
 async function stopRecording() {
   const recording = await recorder.stop();
-  const arrayBuffer = await recording.arrayBuffer();
-  const audioBuffer = await Tone.context.decodeAudioData(arrayBuffer);
-  recordedBuffer = new Tone.ToneAudioBuffer(audioBuffer);
-  buffers.push(recordedBuffer);
-  console.log("recorded sample added!");
+  console.log("recording ready:", URL.createObjectURL(recording));
 }
 
 function draw() {
-  if (bufferIndex === 0) {
-    drawNeonGlitchSpectrum();
-  } else if (bufferIndex === 1) {
-    drawBlueSignalCore();
-  } else {
-    drawMissingDataVisual();
-  }
-
+  drawBlueSignalCore();
   updateAudioParams();
+}
+
+function playNote(time) {
+  pulseCounter++;
+  const skipEvery = floor(map(currentDensity, 0, 1, 4, 1));
+  if (pulseCounter % skipEvery !== 0) return;
+
+  synth.triggerAttackRelease(currentNote, "2n", time);
+
+  if (currentDensity > 0.72 && random() < currentDensity) {
+    const harmonyIndex = min(currentNoteIndex + 2, scale.length - 1);
+    synth.triggerAttackRelease(scale[harmonyIndex], "4n", time + 0.12);
+  }
 }
 
 function drawNeonGlitchSpectrum() {
@@ -325,7 +318,7 @@ function drawMissingDataVisual() {
     if (noiseVal > 0.35) {
       stroke(255);
       strokeWeight(1);
-      const offset = sin(time + y * 0.01) * grainSize * 50;
+      const offset = sin(time + y * 0.01) * currentDensity * 50;
       line(0 + offset, y, width - offset, y);
     }
   }
@@ -355,38 +348,23 @@ function drawMissingDataVisual() {
 
 function updateAudioParams() {
   if (bodyControls.hasPose) {
-    const rhythmSpeed = map(bodyControls.leftX, 0, 1, 0.65, 1.8);
-    const rhythmicGrain = map(bodyControls.leftY, 0, 1, 0.035, 0.45);
-    const ambientGrain = map(bodyControls.intensity, 0, 1, 0.6, 0.04);
-    const sliceRatio = map(bodyControls.leftY, 0, 1, 0.05, 0.45);
-    const pitchAmount = map(bodyControls.rightY, 0, 1, 1200, -1200);
+    currentNoteIndex = floor(map(bodyControls.leftY, 0, 1, scale.length - 1, 0));
+    currentNoteIndex = constrain(currentNoteIndex, 0, scale.length - 1);
+    currentNote = scale[currentNoteIndex];
+    currentVolume = lerp(currentVolume, map(bodyControls.rightY, 0, 1, -30, 0), 0.12);
+    currentDensity = lerp(currentDensity, bodyControls.density, 0.12);
 
-    grainSize = lerp(grainSize, min(rhythmicGrain, ambientGrain), 0.12);
-    overlap = lerp(overlap, map(bodyControls.intensity, 0, 1, 0.45, 0.06), 0.08);
-    volumeLevel = lerp(volumeLevel, map(bodyControls.intensity, 0, 1, 0.2, 10), 0.12);
-
-    player.grainSize = grainSize;
-    player.overlap = overlap;
-    player.playbackRate = rhythmSpeed;
-    player.detune = pitchAmount;
-    reverb.wet.value = lerp(reverb.wet.value, map(bodyControls.intensity, 0, 1, 0.75, 0.12), 0.08);
-
-    if (buffers[bufferIndex].loaded) {
-      const duration = buffers[bufferIndex].duration;
-      const sliceDuration = duration * sliceRatio;
-      const sliceCenter = bodyControls.rightX * duration;
-      loopStart = constrain(sliceCenter - sliceDuration * 0.5, 0, duration - sliceDuration);
-      loopEnd = loopStart + sliceDuration;
-      player.loopStart = loopStart;
-      player.loopEnd = loopEnd;
-    }
+    synth.volume.value = currentVolume;
+    reverb.wet.value = lerp(reverb.wet.value, map(currentDensity, 0, 1, 0.75, 0.35), 0.08);
+    Tone.Transport.bpm.value = map(currentDensity, 0, 1, 56, 92);
   } else {
-    const pitchAmount = map(mouseY, 0, height, 50, -50);
-    volumeLevel = constrain(map(mouseX, 0, width, 0, 10), 0, 10);
-    player.detune = pitchAmount * 20;
+    currentNoteIndex = floor(map(mouseY, height, 0, 0, scale.length - 1));
+    currentNoteIndex = constrain(currentNoteIndex, 0, scale.length - 1);
+    currentNote = scale[currentNoteIndex];
+    currentVolume = map(mouseX, 0, width, -30, 0);
+    currentDensity = map(mouseY, height, 0, 0.15, 0.85);
+    synth.volume.value = currentVolume;
   }
-
-  outputGain.gain.value = volumeLevel;
 }
 
 function setupBodyTracking() {
@@ -444,22 +422,20 @@ function updateBodyControls(results) {
 
   const leftWrist = landmarks[15];
   const rightWrist = landmarks[16];
-  const leftShoulder = landmarks[11];
-  const rightShoulder = landmarks[12];
   const wristsVisible = isPosePointVisible(leftWrist) && isPosePointVisible(rightWrist);
-  const shouldersVisible = isPosePointVisible(leftShoulder) && isPosePointVisible(rightShoulder);
 
-  if (!wristsVisible || !shouldersVisible) {
+  if (!wristsVisible) {
     bodyControls.hasPose = millis() - bodyControls.lastSeen < 1200;
     return;
   }
 
-  const shoulderDistance = dist(leftShoulder.x, leftShoulder.y, rightShoulder.x, rightShoulder.y);
-  const closeness = constrain(map(shoulderDistance, 0.11, 0.34, 0, 1), 0, 1);
+  const handDistance = dist(leftWrist.x, leftWrist.y, rightWrist.x, rightWrist.y);
+  const density = constrain(map(handDistance, 0.08, 0.7, 0, 1), 0, 1);
 
   bodyControls.hasPose = true;
   bodyControls.lastSeen = millis();
-  bodyControls.intensity = lerp(bodyControls.intensity, closeness, 0.18);
+  bodyControls.density = lerp(bodyControls.density, density, 0.18);
+  bodyControls.handDistance = lerp(bodyControls.handDistance, handDistance, 0.18);
   bodyControls.leftX = lerp(bodyControls.leftX, 1 - leftWrist.x, 0.2);
   bodyControls.leftY = lerp(bodyControls.leftY, leftWrist.y, 0.2);
   bodyControls.rightX = lerp(bodyControls.rightX, 1 - rightWrist.x, 0.2);
@@ -482,44 +458,6 @@ function getBandEnergy(spectrum, start, end) {
   return count ? total / count : 0;
 }
 
-function getPressedPoint() {
-  pressedPoint = mouseX / width;
-  x1 = mouseX;
-  y1 = mouseY;
-}
-
-async function getReleasePoint() {
-  releasePoint = mouseX / width;
-  x2 = mouseX;
-  y2 = mouseY;
-  await initializeTone();
-  calculateLoop();
-}
-
-function calculateLoop() {
-  if (!buffers[bufferIndex].loaded) return;
-
-  loopStart = pressedPoint * buffers[bufferIndex].duration;
-  loopEnd = releasePoint * buffers[bufferIndex].duration;
-
-  if (isPlaying) {
-    player.stop();
-  }
-
-  if (loopStart < loopEnd) {
-    player.loopStart = loopStart;
-    player.loopEnd = loopEnd;
-    player.reverse = false;
-    player.start(undefined, loopStart);
-  } else {
-    player.loopStart = loopEnd;
-    player.loopEnd = loopStart;
-    player.reverse = true;
-    player.start(undefined, loopEnd);
-  }
-  isPlaying = true;
-}
-
 async function keyPressed() {
   if (key === 'f' || key === 'F') {
     let fs = fullscreen();
@@ -529,118 +467,27 @@ async function keyPressed() {
   if (key === " ") {
     if (!isPlaying) {
       await initializeTone();
-      if (!buffers[bufferIndex].loaded) return;
-      player.start(undefined, loopStart || 0);
+      loop.start(0);
+      Tone.Transport.start();
       isPlaying = true;
     } else {
-      player.stop();
+      loop.stop();
+      Tone.Transport.stop();
+      synth.releaseAll();
       isPlaying = false;
     }
   }
-
-  if (key === "ArrowRight") {
-    await initializeTone();
-    bufferIndex = (bufferIndex + 1) % buffers.length;
-    player.buffer = buffers[bufferIndex];
-    calculateLoop();
-    bgIndex = (bgIndex + 1) % bgColors.length;
-  }
-  if (key === "ArrowLeft") {
-    await initializeTone();
-    if (bufferIndex > 0) {
-      bufferIndex = (bufferIndex - 1) % buffers.length;
-    } else {
-      bufferIndex = buffers.length - 1;
-    }
-    player.buffer = buffers[bufferIndex];
-    calculateLoop();
-    bgIndex = (bgIndex + bgColors.length - 1) % bgColors.length;
-  }
-}
-
-function trackPad(event) {
-  if (event.wheelDeltaY > 10) {
-    if (grainSize > 0.02) grainSize -= 0.01;
-  } else if (event.wheelDeltaY < -10) {
-    if (grainSize < 2) grainSize += 0.01;
-  }
-  player.grainSize = grainSize;
 }
 
 async function initializeTone() {
   if (toneReady) return;
   await Tone.start();
   await Tone.loaded();
+  Tone.Transport.bpm.value = 64;
   toneReady = true;
   console.log("audio context started");
 }
 
 function windowResized() {
   resizeCanvas(windowWidth, windowHeight);
-}
-
-// MIDI
-function setupMIDI() {
-  if (navigator.requestMIDIAccess) {
-    navigator.requestMIDIAccess({ sysex: false })
-      .then(onMIDISuccess, onMIDIFailure);
-  } else {
-    console.log("Web MIDI API not supported in this browser.");
-  }
-}
-
-function onMIDISuccess(midi) {
-  midiAccess = midi;
-  const inputs = midiAccess.inputs.values();
-  for (let input of inputs) {
-    midiInputs.push(input);
-    input.onmidimessage = handleMIDI;
-  }
-  console.log("MIDI ready:", midiInputs);
-}
-
-function onMIDIFailure() {
-  console.log("Failed to access MIDI devices.");
-}
-
-function handleMIDI(event) {
-  const [status, data1, data2] = event.data;
-
-  // CC messages only
-  if (status === 176) {
-    const value = data2 / 127;
-
-    switch (data1) {
-      case 21: // Knob 1 → grain size
-        grainSize = map(value, 0, 1, 0.01, 1.5);
-        player.grainSize = grainSize;
-        break;
-      case 22: // Knob 2 → playback rate
-        player.playbackRate = map(value, 0, 1, 0.5, 2);
-        break;
-      case 23: // Knob 3 → detune
-        player.detune = map(value, 0, 1, -1200, 1200);
-        break;
-      case 24: // Knob 4 → reverb wet
-        reverb.wet.value = value;
-        break;
-      case 25: // Fader → loop start
-        pressedPoint = value;
-        initializeTone().then(calculateLoop);
-        break;
-      case 26: // Fader → loop end
-        releasePoint = value;
-        initializeTone().then(calculateLoop);
-        break;
-      case 36: // Button → next buffer
-        if (data2 > 0) {
-          initializeTone().then(() => {
-            bufferIndex = (bufferIndex + 1) % buffers.length;
-            player.buffer = buffers[bufferIndex];
-            calculateLoop();
-          });
-        }
-        break;
-    }
-  }
 }
