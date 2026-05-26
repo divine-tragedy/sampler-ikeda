@@ -11,6 +11,18 @@ let toneReady = false;
 let grainSize = 0.1;
 let overlap = 0.1;
 let volumeLevel = 1;
+let bodyVideo;
+let pose;
+let poseRunning = false;
+let bodyControls = {
+  hasPose: false,
+  intensity: 0.15,
+  leftX: 0.5,
+  leftY: 0.5,
+  rightX: 0.5,
+  rightY: 0.5,
+  lastSeen: 0,
+};
 
 // Microphone
 let recorder;
@@ -59,6 +71,7 @@ function setup() {
   recorder = new Tone.Recorder();
 
   setupMIDI();
+  setupBodyTracking();
 }
 async function startRecording() {
   await initializeTone();
@@ -341,10 +354,120 @@ function drawMissingDataVisual() {
 }
 
 function updateAudioParams() {
-  const pitchAmount = map(mouseY, 0, height, 50, -50);
-  volumeLevel = constrain(map(mouseX, 0, width, 0, 10), 0, 10);
+  if (bodyControls.hasPose) {
+    const rhythmSpeed = map(bodyControls.leftX, 0, 1, 0.65, 1.8);
+    const rhythmicGrain = map(bodyControls.leftY, 0, 1, 0.035, 0.45);
+    const ambientGrain = map(bodyControls.intensity, 0, 1, 0.6, 0.04);
+    const sliceRatio = map(bodyControls.leftY, 0, 1, 0.05, 0.45);
+    const pitchAmount = map(bodyControls.rightY, 0, 1, 1200, -1200);
+
+    grainSize = lerp(grainSize, min(rhythmicGrain, ambientGrain), 0.12);
+    overlap = lerp(overlap, map(bodyControls.intensity, 0, 1, 0.45, 0.06), 0.08);
+    volumeLevel = lerp(volumeLevel, map(bodyControls.intensity, 0, 1, 0.2, 10), 0.12);
+
+    player.grainSize = grainSize;
+    player.overlap = overlap;
+    player.playbackRate = rhythmSpeed;
+    player.detune = pitchAmount;
+    reverb.wet.value = lerp(reverb.wet.value, map(bodyControls.intensity, 0, 1, 0.75, 0.12), 0.08);
+
+    if (buffers[bufferIndex].loaded) {
+      const duration = buffers[bufferIndex].duration;
+      const sliceDuration = duration * sliceRatio;
+      const sliceCenter = bodyControls.rightX * duration;
+      loopStart = constrain(sliceCenter - sliceDuration * 0.5, 0, duration - sliceDuration);
+      loopEnd = loopStart + sliceDuration;
+      player.loopStart = loopStart;
+      player.loopEnd = loopEnd;
+    }
+  } else {
+    const pitchAmount = map(mouseY, 0, height, 50, -50);
+    volumeLevel = constrain(map(mouseX, 0, width, 0, 10), 0, 10);
+    player.detune = pitchAmount * 20;
+  }
+
   outputGain.gain.value = volumeLevel;
-  player.detune = pitchAmount * 20;
+}
+
+function setupBodyTracking() {
+  bodyVideo = createCapture({
+    video: {
+      width: 640,
+      height: 480,
+      facingMode: "user",
+    },
+    audio: false,
+  });
+  bodyVideo.size(640, 480);
+  bodyVideo.hide();
+
+  if (typeof Pose === "undefined") {
+    console.log("MediaPipe Pose not loaded. Mouse controls stay active.");
+    return;
+  }
+
+  pose = new Pose({
+    locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/pose/${file}`,
+  });
+  pose.setOptions({
+    modelComplexity: 1,
+    smoothLandmarks: true,
+    minDetectionConfidence: 0.55,
+    minTrackingConfidence: 0.55,
+  });
+  pose.onResults(updateBodyControls);
+  runPoseTracking();
+}
+
+async function runPoseTracking() {
+  if (!pose || poseRunning || !bodyVideo || !bodyVideo.elt) return;
+  poseRunning = true;
+
+  try {
+    if (bodyVideo.elt.readyState >= 2) {
+      await pose.send({ image: bodyVideo.elt });
+    }
+  } catch (error) {
+    console.log("Body tracking paused:", error);
+  }
+
+  poseRunning = false;
+  requestAnimationFrame(runPoseTracking);
+}
+
+function updateBodyControls(results) {
+  const landmarks = results.poseLandmarks;
+  if (!landmarks) {
+    bodyControls.hasPose = millis() - bodyControls.lastSeen < 1200;
+    return;
+  }
+
+  const leftWrist = landmarks[15];
+  const rightWrist = landmarks[16];
+  const leftShoulder = landmarks[11];
+  const rightShoulder = landmarks[12];
+  const wristsVisible = isPosePointVisible(leftWrist) && isPosePointVisible(rightWrist);
+  const shouldersVisible = isPosePointVisible(leftShoulder) && isPosePointVisible(rightShoulder);
+
+  if (!wristsVisible || !shouldersVisible) {
+    bodyControls.hasPose = millis() - bodyControls.lastSeen < 1200;
+    return;
+  }
+
+  const shoulderDistance = dist(leftShoulder.x, leftShoulder.y, rightShoulder.x, rightShoulder.y);
+  const closeness = constrain(map(shoulderDistance, 0.11, 0.34, 0, 1), 0, 1);
+
+  bodyControls.hasPose = true;
+  bodyControls.lastSeen = millis();
+  bodyControls.intensity = lerp(bodyControls.intensity, closeness, 0.18);
+  bodyControls.leftX = lerp(bodyControls.leftX, 1 - leftWrist.x, 0.2);
+  bodyControls.leftY = lerp(bodyControls.leftY, leftWrist.y, 0.2);
+  bodyControls.rightX = lerp(bodyControls.rightX, 1 - rightWrist.x, 0.2);
+  bodyControls.rightY = lerp(bodyControls.rightY, rightWrist.y, 0.2);
+}
+
+function isPosePointVisible(point) {
+  return point && (point.visibility === undefined || point.visibility > 0.45);
 }
 
 function getBandEnergy(spectrum, start, end) {
