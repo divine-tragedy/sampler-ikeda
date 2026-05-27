@@ -1,8 +1,11 @@
 const instructions = [
-    "BODY INSTRUMENT:",
+    "FINGER DATA INSTRUMENT:",
     "space to start/stop",
-    "left hand selects notes",
-    "right hand controls volume",
-    "hands close = sparse",
-    "hands far = more notes"
+    "left thumb = low sine pulse",
+    "left index = high sine tone",
+    "left middle = click burst",
+    "left ring = noise burst",
+    "left pinky = silence interruption",
+    "right hand modulates",
+    "movement controls entropy"
 ];

@@ -3,52 +3,70 @@ let cnv;
 let isPlaying = false;
 let toneReady = false;
 let bodyVideo;
-let pose;
-let poseRunning = false;
-const scale = [
-  "C4", "Eb4", "F4", "G4", "Bb4",
-  "C5", "Eb5"
-];
+let hands;
+let handsRunning = false;
 let bodyControls = {
-  hasPose: false,
+  hasHands: false,
   density: 0.25,
   handDistance: 0.2,
+  entropy: 0.15,
   leftX: 0.5,
   leftY: 0.5,
   rightX: 0.5,
   rightY: 0.5,
+  fingers: {
+    thumb: false,
+    index: false,
+    middle: false,
+    ring: false,
+    pinky: false,
+  },
   lastSeen: 0,
 };
-let currentNote = scale[0];
-let currentNoteIndex = 0;
-let currentVolume = -24;
 let currentDensity = 0.25;
-let pulseCounter = 0;
+let currentEntropy = 0.15;
+let previousLeftX = 0.5;
+let previousLeftY = 0.5;
+let previousRightX = 0.5;
+let previousRightY = 0.5;
+
+// Voice sampling
+let isSampling = false;
+let sampleBuffer = null;
+let showTalkPrompt = false;
+let samplePlayer = null;
+let sampleEffects = null;
+let sampleRecorded = false;
+let sampleStartTime = 0;
 
 // Microphone
 let recorder;
 let mic;
 
-const synth = new Tone.PolySynth(Tone.Synth, {
-  oscillator: {
-    type: "sine"
-  },
-  envelope: {
-    attack: 1.5,
-    decay: 0.3,
-    sustain: 0.6,
-    release: 3
-  }
-});
 const reverb = new Tone.Reverb({
-  decay: 6,
-  wet: 0.6,
+  decay: 10,
+  wet: 0.5,
 });
+const masterGain = new Tone.Gain(0.75);
+const lowGain = new Tone.Gain(0);
+const highGain = new Tone.Gain(0);
+const clickGain = new Tone.Gain(0.7);
+const noiseGain = new Tone.Gain(0);
+const lowSine = new Tone.Oscillator({
+  type: "sine",
+  frequency: 110,
+});
+const highSine = new Tone.Oscillator({
+  type: "sine",
+  frequency: 520,
+});
+const whiteNoise = new Tone.Noise("white");
+const mildFilter = new Tone.Filter(900, "lowpass");
 const fft = new Tone.FFT(64);
 const meter = new Tone.Meter();
 const loop = new Tone.Loop((time) => {
-  playNote(time);
-}, "4n");
+  playFingerBits(time);
+}, "8n");
 
 function setup() {
   cnv = createCanvas(448 , 256);
@@ -58,10 +76,18 @@ function setup() {
   recorder = new Tone.Recorder();
   mic.connect(recorder);
 
-  synth.connect(reverb);
-  synth.connect(fft);
-  synth.connect(meter);
-  reverb.toDestination();
+  lowSine.connect(lowGain);
+  highSine.connect(highGain);
+  whiteNoise.connect(noiseGain);
+  lowGain.connect(reverb);
+  highGain.connect(reverb);
+  noiseGain.connect(mildFilter);
+  clickGain.connect(mildFilter);
+  mildFilter.connect(reverb);
+  reverb.connect(masterGain);
+  masterGain.toDestination();
+  masterGain.connect(fft);
+  masterGain.connect(meter);
 
   setupBodyTracking();
 }
@@ -77,22 +103,97 @@ async function stopRecording() {
   console.log("recording ready:", URL.createObjectURL(recording));
 }
 
+
+// --- MOUTH OPEN DETECTION STUB ---
+function isMouthFullyOpen() {
+  // TODO: Replace with real mouth open detection using face landmarks
+  // For now, use key 'M' for manual trigger
+  return keyIsDown(77); // 'M' key
+}
+
 function draw() {
   drawBlueSignalCore();
   updateAudioParams();
+
+  // Show 'talk' prompt if sampling
+  if (showTalkPrompt) {
+    push();
+    textAlign(CENTER, CENTER);
+    textSize(48);
+    fill(255, 80, 80);
+    text('TALK', width/2, height/2);
+    pop();
+  }
+
+  // Check for mouth open (stub, replace with real detection)
+  if (!isSampling && isMouthFullyOpen()) {
+    startVoiceSampling();
+  }
+
+  // Play sample in loop if recorded
+  if (sampleRecorded && samplePlayer && !samplePlayer.state && isPlaying) {
+    samplePlayer.start();
+  }
+
+  // Update effects for sample with left hand
+  if (sampleEffects && bodyControls.hasHands) {
+    updateSampleEffects();
+  }
 }
 
-function playNote(time) {
-  pulseCounter++;
-  const skipEvery = floor(map(currentDensity, 0, 1, 4, 1));
-  if (pulseCounter % skipEvery !== 0) return;
+function playFingerBits(time) {
+  const fingers = bodyControls.fingers;
+  const chance = 0.2 + currentDensity * 0.8;
 
-  synth.triggerAttackRelease(currentNote, "2n", time);
-
-  if (currentDensity > 0.72 && random() < currentDensity) {
-    const harmonyIndex = min(currentNoteIndex + 2, scale.length - 1);
-    synth.triggerAttackRelease(scale[harmonyIndex], "4n", time + 0.12);
+  if (fingers.thumb && random() < chance) {
+    pulseGain(lowGain.gain, 0.45 + currentDensity * 0.35, 0.18, time);
   }
+
+  highGain.gain.cancelScheduledValues(time);
+  highGain.gain.setTargetAtTime(fingers.index ? 0.08 + currentEntropy * 0.1 : 0, time, 0.08);
+
+  if (fingers.middle && random() < chance) {
+    click(time, map(currentEntropy, 0, 1, 420, 1200));
+  }
+
+  if (fingers.ring && random() < chance) {
+    burst(time);
+  }
+
+  if (fingers.pinky && random() < 0.35 + currentEntropy * 0.45) {
+    silenceInterruption(time);
+  }
+}
+
+function pulseGain(param, value, duration, time) {
+  param.cancelScheduledValues(time);
+  param.setValueAtTime(0, time);
+  param.linearRampToValueAtTime(value, time + 0.015);
+  param.exponentialRampToValueAtTime(0.001, time + duration);
+}
+
+function click(time, frequency) {
+  const osc = new Tone.Oscillator({
+    type: "triangle",
+    frequency,
+  }).connect(clickGain);
+
+  osc.start(time);
+  osc.stop(time + 0.01);
+}
+
+function burst(time) {
+  noiseGain.gain.cancelScheduledValues(time);
+  noiseGain.gain.setValueAtTime(0, time);
+  noiseGain.gain.linearRampToValueAtTime(0.08 + currentEntropy * 0.18, time + 0.012);
+  noiseGain.gain.exponentialRampToValueAtTime(0.001, time + 0.08);
+}
+
+function silenceInterruption(time) {
+  masterGain.gain.cancelScheduledValues(time);
+  masterGain.gain.setValueAtTime(masterGain.gain.value, time);
+  masterGain.gain.linearRampToValueAtTime(0.02, time + 0.015);
+  masterGain.gain.linearRampToValueAtTime(0.75, time + 0.14);
 }
 
 function drawNeonGlitchSpectrum() {
@@ -347,23 +448,19 @@ function drawMissingDataVisual() {
 }
 
 function updateAudioParams() {
-  if (bodyControls.hasPose) {
-    currentNoteIndex = floor(map(bodyControls.leftY, 0, 1, scale.length - 1, 0));
-    currentNoteIndex = constrain(currentNoteIndex, 0, scale.length - 1);
-    currentNote = scale[currentNoteIndex];
-    currentVolume = lerp(currentVolume, map(bodyControls.rightY, 0, 1, -30, 0), 0.12);
+  if (bodyControls.hasHands) {
     currentDensity = lerp(currentDensity, bodyControls.density, 0.12);
+    currentEntropy = lerp(currentEntropy, bodyControls.entropy, 0.12);
 
-    synth.volume.value = currentVolume;
-    reverb.wet.value = lerp(reverb.wet.value, map(currentDensity, 0, 1, 0.75, 0.35), 0.08);
-    Tone.Transport.bpm.value = map(currentDensity, 0, 1, 56, 92);
+    lowSine.frequency.value = map(bodyControls.rightX, 0, 1, 55, 220);
+    highSine.frequency.value = map(bodyControls.rightY, 0, 1, 900, 260);
+    reverb.wet.value = lerp(reverb.wet.value, map(bodyControls.rightY, 0, 1, 0.2, 0.85), 0.08);
+    Tone.Transport.bpm.value = map(currentEntropy, 0, 1, 48, 132);
   } else {
-    currentNoteIndex = floor(map(mouseY, height, 0, 0, scale.length - 1));
-    currentNoteIndex = constrain(currentNoteIndex, 0, scale.length - 1);
-    currentNote = scale[currentNoteIndex];
-    currentVolume = map(mouseX, 0, width, -30, 0);
-    currentDensity = map(mouseY, height, 0, 0.15, 0.85);
-    synth.volume.value = currentVolume;
+    currentDensity = map(mouseX, 0, width, 0.15, 0.85);
+    currentEntropy = map(mouseY, height, 0, 0.1, 0.9);
+    lowSine.frequency.value = map(mouseX, 0, width, 55, 220);
+    highSine.frequency.value = map(mouseY, 0, height, 900, 260);
   }
 }
 
@@ -379,71 +476,140 @@ function setupBodyTracking() {
   bodyVideo.size(640, 480);
   bodyVideo.hide();
 
-  if (typeof Pose === "undefined") {
-    console.log("MediaPipe Pose not loaded. Mouse controls stay active.");
+  if (typeof Hands === "undefined") {
+    console.log("MediaPipe Hands not loaded. Mouse controls stay active.");
     return;
   }
 
-  pose = new Pose({
-    locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/pose/${file}`,
+  hands = new Hands({
+    locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`,
   });
-  pose.setOptions({
+  hands.setOptions({
+    maxNumHands: 2,
     modelComplexity: 1,
-    smoothLandmarks: true,
-    minDetectionConfidence: 0.55,
-    minTrackingConfidence: 0.55,
+    minDetectionConfidence: 0.65,
+    minTrackingConfidence: 0.6,
   });
-  pose.onResults(updateBodyControls);
-  runPoseTracking();
+  hands.onResults(updateBodyControls);
+  runHandTracking();
 }
 
-async function runPoseTracking() {
-  if (!pose || poseRunning || !bodyVideo || !bodyVideo.elt) return;
-  poseRunning = true;
+async function runHandTracking() {
+  if (!hands || handsRunning || !bodyVideo || !bodyVideo.elt) return;
+  handsRunning = true;
 
   try {
     if (bodyVideo.elt.readyState >= 2) {
-      await pose.send({ image: bodyVideo.elt });
+      await hands.send({ image: bodyVideo.elt });
     }
   } catch (error) {
-    console.log("Body tracking paused:", error);
+    console.log("Hand tracking paused:", error);
   }
 
-  poseRunning = false;
-  requestAnimationFrame(runPoseTracking);
+  handsRunning = false;
+  requestAnimationFrame(runHandTracking);
 }
 
 function updateBodyControls(results) {
-  const landmarks = results.poseLandmarks;
-  if (!landmarks) {
-    bodyControls.hasPose = millis() - bodyControls.lastSeen < 1200;
+  const allHands = results.multiHandLandmarks || [];
+  if (!allHands.length) {
+    bodyControls.hasHands = millis() - bodyControls.lastSeen < 1200;
     return;
   }
 
-  const leftWrist = landmarks[15];
-  const rightWrist = landmarks[16];
-  const wristsVisible = isPosePointVisible(leftWrist) && isPosePointVisible(rightWrist);
+  // --- MOUTH OPEN DETECTION (stub, replace with real detection) ---
+  // If you have face landmarks, set globalMouthOpen = true/false here
 
-  if (!wristsVisible) {
-    bodyControls.hasPose = millis() - bodyControls.lastSeen < 1200;
-    return;
-  }
 
-  const handDistance = dist(leftWrist.x, leftWrist.y, rightWrist.x, rightWrist.y);
-  const density = constrain(map(handDistance, 0.08, 0.7, 0, 1), 0, 1);
 
-  bodyControls.hasPose = true;
-  bodyControls.lastSeen = millis();
-  bodyControls.density = lerp(bodyControls.density, density, 0.18);
-  bodyControls.handDistance = lerp(bodyControls.handDistance, handDistance, 0.18);
-  bodyControls.leftX = lerp(bodyControls.leftX, 1 - leftWrist.x, 0.2);
-  bodyControls.leftY = lerp(bodyControls.leftY, leftWrist.y, 0.2);
-  bodyControls.rightX = lerp(bodyControls.rightX, 1 - rightWrist.x, 0.2);
-  bodyControls.rightY = lerp(bodyControls.rightY, rightWrist.y, 0.2);
+// --- VOICE SAMPLING LOGIC ---
+async function startVoiceSampling() {
+  isSampling = true;
+  showTalkPrompt = true;
+  await initializeTone();
+  await mic.open();
+  recorder.start();
+  sampleStartTime = millis();
+  setTimeout(stopVoiceSampling, 4000); // 4 seconds
 }
 
-function isPosePointVisible(point) {
-  return point && (point.visibility === undefined || point.visibility > 0.45);
+async function stopVoiceSampling() {
+  showTalkPrompt = false;
+  const recording = await recorder.stop();
+  const arrayBuffer = await recording.arrayBuffer();
+  sampleBuffer = await Tone.getContext().rawContext.decodeAudioData(arrayBuffer);
+  samplePlayer = new Tone.Player(sampleBuffer).toDestination();
+  // Add effects chain for left hand control
+  sampleEffects = new Tone.Filter(800, "lowpass").toDestination();
+  samplePlayer.disconnect();
+  samplePlayer.connect(sampleEffects);
+  sampleRecorded = true;
+  isSampling = false;
+}
+
+function updateSampleEffects() {
+  // Example: left hand Y controls filter cutoff
+  if (sampleEffects) {
+    const cutoff = map(bodyControls.leftY, 0, 1, 400, 4000);
+    sampleEffects.frequency.value = cutoff;
+  }
+}
+  const handedness = results.multiHandedness || [];
+  const leftHand = getHandByLabel(allHands, handedness, "Left") || allHands[0];
+  const rightHand = getHandByLabel(allHands, handedness, "Right") || allHands[1] || leftHand;
+  const leftPalm = getPalmCenter(leftHand);
+  const rightPalm = getPalmCenter(rightHand);
+  const handDistance = dist(leftPalm.x, leftPalm.y, rightPalm.x, rightPalm.y);
+  const density = constrain(map(handDistance, 0.08, 0.7, 0, 1), 0, 1);
+  const movement = dist(leftPalm.x, leftPalm.y, previousLeftX, previousLeftY)
+    + dist(rightPalm.x, rightPalm.y, previousRightX, previousRightY);
+
+  previousLeftX = leftPalm.x;
+  previousLeftY = leftPalm.y;
+  previousRightX = rightPalm.x;
+  previousRightY = rightPalm.y;
+
+  bodyControls.hasHands = true;
+  bodyControls.lastSeen = millis();
+  bodyControls.density = lerp(bodyControls.density, density, 0.18);
+  bodyControls.entropy = lerp(bodyControls.entropy, constrain(map(movement, 0, 0.12, 0, 1), 0, 1), 0.24);
+  bodyControls.handDistance = lerp(bodyControls.handDistance, handDistance, 0.18);
+  bodyControls.leftX = lerp(bodyControls.leftX, 1 - leftPalm.x, 0.2);
+  bodyControls.leftY = lerp(bodyControls.leftY, leftPalm.y, 0.2);
+  bodyControls.rightX = lerp(bodyControls.rightX, 1 - rightPalm.x, 0.2);
+  bodyControls.rightY = lerp(bodyControls.rightY, rightPalm.y, 0.2);
+  bodyControls.fingers = getFingerStates(leftHand);
+}
+
+function getHandByLabel(allHands, handedness, label) {
+  for (let i = 0; i < handedness.length; i++) {
+    if (handedness[i].label === label) return allHands[i];
+  }
+  return null;
+}
+
+function getPalmCenter(hand) {
+  return {
+    x: (hand[0].x + hand[5].x + hand[17].x) / 3,
+    y: (hand[0].y + hand[5].y + hand[17].y) / 3,
+  };
+}
+
+function getFingerStates(hand) {
+  return {
+    thumb: isFingerOpen(hand, 4, 2),
+    index: isFingerOpen(hand, 8, 6),
+    middle: isFingerOpen(hand, 12, 10),
+    ring: isFingerOpen(hand, 16, 14),
+    pinky: isFingerOpen(hand, 20, 18),
+  };
+}
+
+function isFingerOpen(hand, tipIndex, jointIndex) {
+  const wrist = hand[0];
+  const tip = hand[tipIndex];
+  const joint = hand[jointIndex];
+  return dist(tip.x, tip.y, wrist.x, wrist.y) > dist(joint.x, joint.y, wrist.x, wrist.y) + 0.035;
 }
 
 function getBandEnergy(spectrum, start, end) {
@@ -473,7 +639,9 @@ async function keyPressed() {
     } else {
       loop.stop();
       Tone.Transport.stop();
-      synth.releaseAll();
+      lowGain.gain.value = 0;
+      highGain.gain.value = 0;
+      noiseGain.gain.value = 0;
       isPlaying = false;
     }
   }
@@ -483,6 +651,9 @@ async function initializeTone() {
   if (toneReady) return;
   await Tone.start();
   await Tone.loaded();
+  lowSine.start();
+  highSine.start();
+  whiteNoise.start();
   Tone.Transport.bpm.value = 64;
   toneReady = true;
   console.log("audio context started");
