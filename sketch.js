@@ -1,664 +1,609 @@
-// Global state
-let cnv;
-let isPlaying = false;
-let toneReady = false;
-let bodyVideo;
-let hands;
-let handsRunning = false;
-let bodyControls = {
-  hasHands: false,
-  density: 0.25,
-  handDistance: 0.2,
-  entropy: 0.15,
-  leftX: 0.5,
-  leftY: 0.5,
-  rightX: 0.5,
-  rightY: 0.5,
-  fingers: {
-    thumb: false,
-    index: false,
-    middle: false,
-    ring: false,
-    pinky: false,
+let video;
+let handPose;
+let hands = [];
+let audioReady = false;
+let audioStarting = false;
+let melodyOn = false;
+let leftThumbWasUp = false;
+let melodyStep = 0;
+let worldIndex = 0;
+
+let melodySynth;
+let leadSynth;
+let glitchSynth;
+let kickSynth;
+let padOscA;
+let padOscB;
+let padGain;
+let noise;
+let noiseGain;
+let filter;
+let echo;
+let pan;
+let masterGain;
+let melodyLoop;
+
+let previousMiddleTip = null;
+let previousMiddleAngle = null;
+let circleAmount = 0;
+let rightIndexWasPinched = false;
+let rightMiddleWasPinched = false;
+
+const canvasW = 640;
+const canvasH = 480;
+const pinchDistance = 34;
+
+const worlds = [
+  {
+    name: "Data Pulse",
+    bpm: 132,
+    notes: [880, 1760, 1320, 990, 2200, 660, 1760, 1100, 0, 2640, 880, 0],
   },
-  lastSeen: 0,
+  {
+    name: "Glass Grid",
+    bpm: 108,
+    notes: [523, 784, 1046, 1568, 2093, 1568, 1046, 784, 0, 1175, 1760, 0],
+  },
+  {
+    name: "Low Signal",
+    bpm: 96,
+    notes: [55, 110, 220, 0, 165, 330, 0, 440, 82, 165, 247, 0],
+  },
+];
+
+const leftState = {
+  thumb: false,
+  index: false,
+  middle: false,
+  ring: false,
+  pinky: false,
+  pitch: 0,
+  echo: 0,
+  brightness: 0,
+  sparkle: 0,
 };
-let currentDensity = 0.25;
-let currentEntropy = 0.15;
-let previousLeftX = 0.5;
-let previousLeftY = 0.5;
-let previousRightX = 0.5;
-let previousRightY = 0.5;
 
-// Voice sampling
-let isSampling = false;
-let sampleBuffer = null;
-let showTalkPrompt = false;
-let samplePlayer = null;
-let sampleEffects = null;
-let sampleRecorded = false;
-let sampleStartTime = 0;
+const rightState = {
+  index: false,
+  indexPinch: false,
+  pitch: 0,
+  pan: 0,
+  middle: false,
+  middleSpeed: 0,
+  middleCircle: 0,
+  middlePinch: false,
+  ring: false,
+  pad: 0,
+  shimmer: 0,
+  pinky: false,
+  chaos: 0,
+  modifier: "none",
+};
 
-// Microphone
-let recorder;
-let mic;
+const connections = [
+  [0, 1], [1, 2], [2, 3], [3, 4],
+  [0, 5], [5, 6], [6, 7], [7, 8],
+  [0, 9], [9, 10], [10, 11], [11, 12],
+  [0, 13], [13, 14], [14, 15], [15, 16],
+  [0, 17], [17, 18], [18, 19], [19, 20],
+  [5, 9], [9, 13], [13, 17],
+];
 
-const reverb = new Tone.Reverb({
-  decay: 10,
-  wet: 0.5,
-});
-const masterGain = new Tone.Gain(0.75);
-const lowGain = new Tone.Gain(0);
-const highGain = new Tone.Gain(0);
-const clickGain = new Tone.Gain(0.7);
-const noiseGain = new Tone.Gain(0);
-const lowSine = new Tone.Oscillator({
-  type: "sine",
-  frequency: 110,
-});
-const highSine = new Tone.Oscillator({
-  type: "sine",
-  frequency: 520,
-});
-const whiteNoise = new Tone.Noise("white");
-const mildFilter = new Tone.Filter(900, "lowpass");
-const fft = new Tone.FFT(64);
-const meter = new Tone.Meter();
-const loop = new Tone.Loop((time) => {
-  playFingerBits(time);
-}, "8n");
+function preload() {
+  handPose = ml5.handPose({
+    flipped: true,
+    maxHands: 2,
+  });
+}
 
 function setup() {
-  cnv = createCanvas(448 , 256);
-  fullscreen(true);
+  createCanvas(canvasW, canvasH);
 
-  mic = new Tone.UserMedia();
-  recorder = new Tone.Recorder();
-  mic.connect(recorder);
+  video = createCapture(VIDEO);
+  video.size(canvasW, canvasH);
+  video.hide();
 
-  lowSine.connect(lowGain);
-  highSine.connect(highGain);
-  whiteNoise.connect(noiseGain);
-  lowGain.connect(reverb);
-  highGain.connect(reverb);
-  noiseGain.connect(mildFilter);
-  clickGain.connect(mildFilter);
-  mildFilter.connect(reverb);
-  reverb.connect(masterGain);
-  masterGain.toDestination();
-  masterGain.connect(fft);
-  masterGain.connect(meter);
+  handPose.detectStart(video, (results) => {
+    hands = results.slice(0, 2);
+  });
 
-  setupBodyTracking();
-}
-async function startRecording() {
-  await initializeTone();
-  await mic.open();
-  recorder.start();
-  console.log("recording...");
-}
-
-async function stopRecording() {
-  const recording = await recorder.stop();
-  console.log("recording ready:", URL.createObjectURL(recording));
-}
-
-
-// --- MOUTH OPEN DETECTION STUB ---
-function isMouthFullyOpen() {
-  // TODO: Replace with real mouth open detection using face landmarks
-  // For now, use key 'M' for manual trigger
-  return keyIsDown(77); // 'M' key
+  setupAudio();
 }
 
 function draw() {
-  drawBlueSignalCore();
-  updateAudioParams();
-
-  // Show 'talk' prompt if sampling
-  if (showTalkPrompt) {
-    push();
-    textAlign(CENTER, CENTER);
-    textSize(48);
-    fill(255, 80, 80);
-    text('TALK', width/2, height/2);
-    pop();
-  }
-
-  // Check for mouth open (stub, replace with real detection)
-  if (!isSampling && isMouthFullyOpen()) {
-    startVoiceSampling();
-  }
-
-  // Play sample in loop if recorded
-  if (sampleRecorded && samplePlayer && !samplePlayer.state && isPlaying) {
-    samplePlayer.start();
-  }
-
-  // Update effects for sample with left hand
-  if (sampleEffects && bodyControls.hasHands) {
-    updateSampleEffects();
-  }
-}
-
-function playFingerBits(time) {
-  const fingers = bodyControls.fingers;
-  const chance = 0.2 + currentDensity * 0.8;
-
-  if (fingers.thumb && random() < chance) {
-    pulseGain(lowGain.gain, 0.45 + currentDensity * 0.35, 0.18, time);
-  }
-
-  highGain.gain.cancelScheduledValues(time);
-  highGain.gain.setTargetAtTime(fingers.index ? 0.08 + currentEntropy * 0.1 : 0, time, 0.08);
-
-  if (fingers.middle && random() < chance) {
-    click(time, map(currentEntropy, 0, 1, 420, 1200));
-  }
-
-  if (fingers.ring && random() < chance) {
-    burst(time);
-  }
-
-  if (fingers.pinky && random() < 0.35 + currentEntropy * 0.45) {
-    silenceInterruption(time);
-  }
-}
-
-function pulseGain(param, value, duration, time) {
-  param.cancelScheduledValues(time);
-  param.setValueAtTime(0, time);
-  param.linearRampToValueAtTime(value, time + 0.015);
-  param.exponentialRampToValueAtTime(0.001, time + duration);
-}
-
-function click(time, frequency) {
-  const osc = new Tone.Oscillator({
-    type: "triangle",
-    frequency,
-  }).connect(clickGain);
-
-  osc.start(time);
-  osc.stop(time + 0.01);
-}
-
-function burst(time) {
-  noiseGain.gain.cancelScheduledValues(time);
-  noiseGain.gain.setValueAtTime(0, time);
-  noiseGain.gain.linearRampToValueAtTime(0.08 + currentEntropy * 0.18, time + 0.012);
-  noiseGain.gain.exponentialRampToValueAtTime(0.001, time + 0.08);
-}
-
-function silenceInterruption(time) {
-  masterGain.gain.cancelScheduledValues(time);
-  masterGain.gain.setValueAtTime(masterGain.gain.value, time);
-  masterGain.gain.linearRampToValueAtTime(0.02, time + 0.015);
-  masterGain.gain.linearRampToValueAtTime(0.75, time + 0.14);
-}
-
-function drawNeonGlitchSpectrum() {
-  background(0, 42);
-
-  const spectrum = fft.getValue();
-  const bass = getBandEnergy(spectrum, 0, 8);
-  const mids = getBandEnergy(spectrum, 8, 34);
-  const treble = getBandEnergy(spectrum, 34, spectrum.length);
-  const volume = constrain(map(meter.getValue(), -60, -6, 0, 1), 0, 1);
-  const pulse = isPlaying ? volume : 0.15 + sin(frameCount * 0.03) * 0.05;
-  const glitch = pulse * 22 + random(-2, 2);
-
-  noStroke();
-  blendMode(ADD);
-
-  // Solid cyan and blue low-end blocks.
-  fill(0, 150 + bass * 105, 255, 170 + bass * 80);
-  rect(0, 0, width * (0.12 + bass * 0.06), height);
-  fill(0, 45, 200, 180);
-  rect(width * 0.04 + sin(frameCount * 0.05) * glitch, 0, width * 0.1, height);
-
-  // Mint/teal scanlines.
-  for (let x = width * 0.18; x < width * 0.38; x += 4) {
-    const h = height * (0.5 + bass * 0.5);
-    const y = (height - h) / 2 + random(-glitch, glitch);
-    fill(80, 255, 210, 65 + bass * 160);
-    rect(x + random(-2, 2), y, 1 + bass * 3, h);
-  }
-
-  // Segmented purple and dark green mid-range blocks.
-  for (let y = 0; y < height; y += 24) {
-    const blockHeight = 8 + mids * 22 + noise(y, frameCount * 0.02) * 16;
-    const shift = sin(frameCount * 0.04 + y * 0.08) * mids * 18;
-    fill(95, 20, 150, 75 + mids * 125);
-    rect(width * 0.42 + shift, y + 4, width * 0.16, blockHeight);
-    fill(20, 95, 70, 55 + mids * 80);
-    rect(width * 0.52 - shift * 0.4, y + 14, width * 0.1, blockHeight * 0.6);
-  }
-
-  // Hot magenta neon ribbon.
-  const ribbonX = width * 0.68 + sin(frameCount * 0.06) * 8;
-  for (let i = 0; i < 8; i++) {
-    fill(255, 20 + i * 12, 190, 25 + volume * 55);
-    rect(ribbonX - i * 3, 0, 8 + i * 5 + volume * 24, height);
-  }
-  fill(255, 30, 170, 200);
-  rect(ribbonX + random(-glitch, glitch), 0, 10 + volume * 22, height);
-
-  // High-frequency prism lines on the right.
-  for (let x = width * 0.78; x < width; x += 3) {
-    const hueShift = map(x, width * 0.78, width, 0, 1);
-    const lineAlpha = 60 + treble * 180;
-    fill(255, 220 - hueShift * 120, hueShift * 210, lineAlpha);
-    rect(x + random(-treble * 10, treble * 10), 0, 1 + treble * 3, height);
-  }
-
-  // Sudden bright horizontal glitches during louder moments.
-  if (random() < 0.03 + volume * 0.18) {
-    fill(random(120, 255), random(40, 255), random(160, 255), 150);
-    rect(0, random(height), width, random(1, 5));
-  }
-
-  blendMode(BLEND);
-}
-
-function drawBlueSignalCore() {
-  const spectrum = fft.getValue();
-  const bass = getBandEnergy(spectrum, 0, 10);
-  const mids = getBandEnergy(spectrum, 10, 36);
-  const treble = getBandEnergy(spectrum, 36, spectrum.length);
-  const volume = constrain(map(meter.getValue(), -60, -6, 0, 1), 0, 1);
-  const energy = isPlaying ? volume : 0.18 + sin(frameCount * 0.035) * 0.06;
-  const cx = width * 0.5;
-  const cy = height * 0.48;
-  const coreSize = min(width, height) * (0.09 + energy * 0.11 + bass * 0.06);
-  const spin = sin(frameCount * (0.01 + mids * 0.035)) * 0.16;
-
-  background(2, 8, 16);
-
-  noStroke();
-  fill(3, 42, 78, 235);
-  rect(width * 0.12, height * 0.06, width * 0.76, height * 0.82);
-
-  fill(0, 20, 34, 105);
-  rect(width * 0.12, height * 0.72, width * 0.76, height * 0.16);
-
-  stroke(0, 115, 205, 22);
-  strokeWeight(1);
-  for (let y = height * 0.08; y < height * 0.86; y += 3) {
-    line(width * 0.12, y, width * 0.88, y);
-  }
-
-  noStroke();
-  for (let y = height * 0.08; y < height * 0.86; y += 18) {
-    fill(0, 12, 24, 18 + noise(y * 0.04, frameCount * 0.02) * 24);
-    rect(width * 0.12, y, width * 0.76, 2);
-  }
-
-  for (let i = 0; i < 65; i++) {
-    fill(90, 180, 230, random(5, 18));
-    rect(random(width * 0.12, width * 0.88), random(height * 0.06, height * 0.88), 1, 1);
-  }
-
-  blendMode(ADD);
-
-  stroke(35, 170, 245, 18 + energy * 28);
-  strokeWeight(1);
-  line(width * 0.28, cy, width * 0.72, cy);
-  line(cx, height * 0.13, cx, height * 0.84);
-
-  stroke(75, 180, 245, 14 + treble * 22);
-  strokeWeight(1);
-  line(width * 0.28, height * 0.2, width * 0.72, height * 0.76);
-  line(width * 0.72, height * 0.2, width * 0.28, height * 0.76);
-
-  noStroke();
-  for (let i = 9; i > 0; i--) {
-    const glowSize = coreSize * (1.2 + i * 0.42);
-    fill(0, 185, 255, 5 + energy * 9);
-    ellipse(cx, cy, glowSize, glowSize * 1.1);
-  }
-
-  fill(0, 125, 220, 18 + energy * 20);
-  rect(cx - coreSize * 0.2, height * 0.12, coreSize * 0.4, height * 0.7);
-  fill(0, 220, 255, 32 + energy * 38);
-  rect(cx - coreSize * 0.07, height * 0.18, coreSize * 0.14, height * 0.58);
+  background(8);
 
   push();
-  translate(cx, cy);
-  rotate(spin);
-  drawSignalCrystal(coreSize);
+  translate(width, 0);
+  scale(-1, 1);
+  image(video, 0, 0, width, height);
   pop();
 
-  stroke(155, 235, 255, 42 + energy * 70);
-  strokeWeight(1);
-  line(cx - coreSize * 2.6, cy, cx + coreSize * 2.6, cy);
-  line(cx, cy - coreSize * 3.4, cx, cy + coreSize * 3.4);
-
-  stroke(180, 235, 255, 20 + treble * 34);
-  strokeWeight(1);
-  for (let i = 0; i < 4; i++) {
-    const ray = coreSize * (3.1 + i * 0.22);
-    const angle = QUARTER_PI + i * HALF_PI;
-    line(cx, cy, cx + cos(angle) * ray, cy + sin(angle) * ray);
-  }
-
-  blendMode(BLEND);
-
-  noStroke();
-  fill(0, 0, 0, 34);
-  rect(width * 0.12, height * 0.86, width * 0.76, height * 0.025);
-  fill(0, 0, 0, 42);
-  rect(0, 0, width, height * 0.06);
-  rect(0, height * 0.88, width, height * 0.12);
+  updateHandControls();
+  drawHands();
+  drawPanels();
 }
 
-function drawSignalCrystal(size) {
-  noStroke();
-  for (let i = 8; i > 0; i--) {
-    fill(0, 215, 255, 10 + i);
-    ellipse(0, 0, size * (0.8 + i * 0.24), size * (1.2 + i * 0.38));
-  }
+function setupAudio() {
+  masterGain = new Tone.Gain(0.7).toDestination();
+  filter = new Tone.Filter(1400, "lowpass").connect(masterGain);
+  echo = new Tone.FeedbackDelay("16n", 0.18).connect(filter);
+  pan = new Tone.Panner(0).connect(echo);
 
-  const top = { x: 0, y: -size * 0.74 };
-  const upperRight = { x: size * 0.27, y: -size * 0.42 };
-  const lowerRight = { x: size * 0.27, y: size * 0.42 };
-  const bottom = { x: 0, y: size * 0.74 };
-  const lowerLeft = { x: -size * 0.27, y: size * 0.42 };
-  const upperLeft = { x: -size * 0.27, y: -size * 0.42 };
-  const middleLeft = { x: -size * 0.08, y: 0 };
-  const middleRight = { x: size * 0.08, y: 0 };
-  const center = { x: 0, y: 0 };
+  melodySynth = new Tone.Synth({
+    oscillator: { type: "sine" },
+    envelope: { attack: 0.001, decay: 0.04, sustain: 0.02, release: 0.06 },
+  }).connect(pan);
 
-  stroke(235, 255, 255, 190);
-  strokeWeight(0.8);
+  leadSynth = new Tone.Synth({
+    oscillator: { type: "square" },
+    envelope: { attack: 0.001, decay: 0.05, sustain: 0.01, release: 0.08 },
+  }).connect(pan);
 
-  drawCrystalFacet([top, upperRight, middleRight, center, middleLeft, upperLeft], color(255, 255, 255, 245));
-  drawCrystalFacet([center, middleRight, lowerRight, bottom], color(185, 250, 255, 235));
-  drawCrystalFacet([center, bottom, lowerLeft, middleLeft], color(100, 230, 255, 205));
-  drawCrystalFacet([upperLeft, middleLeft, lowerLeft, bottom, top], color(200, 255, 255, 130));
-  drawCrystalFacet([top, upperRight, lowerRight, middleRight], color(255, 255, 255, 170));
+  glitchSynth = new Tone.Synth({
+    oscillator: { type: "triangle" },
+    envelope: { attack: 0.001, decay: 0.025, sustain: 0, release: 0.03 },
+  }).connect(filter);
 
-  stroke(255, 255, 255, 250);
-  strokeWeight(1);
-  line(top.x, top.y, bottom.x, bottom.y);
-  line(upperLeft.x, upperLeft.y, upperRight.x, upperRight.y);
-  line(lowerLeft.x, lowerLeft.y, lowerRight.x, lowerRight.y);
+  kickSynth = new Tone.MembraneSynth({
+    pitchDecay: 0.008,
+    octaves: 4,
+    envelope: { attack: 0.001, decay: 0.12, sustain: 0, release: 0.02 },
+  }).connect(filter);
 
-  stroke(255, 255, 255, 245);
-  strokeWeight(1.5);
-  line(-size * 0.08, -size * 0.36, size * 0.08, -size * 0.48);
-  line(-size * 0.05, -size * 0.16, size * 0.09, -size * 0.24);
-  line(-size * 0.07, size * 0.2, size * 0.08, size * 0.12);
+  padGain = new Tone.Gain(0).connect(filter);
+  padOscA = new Tone.Oscillator(110, "sine").connect(padGain);
+  padOscB = new Tone.Oscillator(165, "sine").connect(padGain);
 
-  noStroke();
-  fill(255, 255, 255, 245);
-  ellipse(0, -size * 0.1, size * 0.2, size * 0.72);
-  fill(0, 235, 255, 90);
-  ellipse(0, 0, size * 0.5, size * 1.3);
-}
+  noiseGain = new Tone.Gain(0).connect(filter);
+  noise = new Tone.Noise("white").connect(noiseGain);
 
-function drawCrystalFacet(points, facetColor) {
-  fill(facetColor);
-  beginShape();
-  for (let point of points) {
-    vertex(point.x, point.y);
-  }
-  endShape(CLOSE);
-}
+  echo.wet.value = 0;
+  filter.Q.value = 1;
 
-function drawMissingDataVisual() {
-  background(0, 20); // slight trail effect
+  melodyLoop = new Tone.Loop((time) => {
+    if (!melodyOn) return;
 
-  const spacing = 8;
-  const time = frameCount * 0.01;
+    const world = worlds[worldIndex];
+    const base = world.notes[melodyStep % world.notes.length];
+    melodyStep++;
 
-  noFill();
-
-  // --- Horizontal lines with intermittent "missing data" ---
-  for (let y = 0; y < height; y += spacing) {
-    const noiseVal = noise(y * 0.01, time);
-    if (noiseVal > 0.35) {
-      stroke(255);
-      strokeWeight(1);
-      const offset = sin(time + y * 0.01) * currentDensity * 50;
-      line(0 + offset, y, width - offset, y);
+    if (base > 0) {
+      const shifted = base * pow(2, map(leftState.pitch, 0, 1, -12, 12) / 12);
+      melodySynth.triggerAttackRelease(shifted, "32n", time, 0.5);
     }
-  }
 
-  // --- Vertical glitch lines ---
-  for (let x = 0; x < width; x += spacing * 2) {
-    const n = noise(x * 0.02, time * 1.5);
-    if (n > 0.6) {
-      stroke(255);
-      strokeWeight(0.5);
-      const glitchShift = sin(time * 5 + x) * 20;
-      line(x + glitchShift, 0, x - glitchShift, height);
+    if (leftState.pinky && random() < 0.1 + leftState.sparkle * 0.35) {
+      glitchSynth.triggerAttackRelease(random([880, 1760, 2640, 3520]), "64n", time, 0.25);
     }
+  }, "8n");
+}
+
+async function startAudio() {
+  if (audioReady || audioStarting) return;
+
+  audioStarting = true;
+
+  try {
+    await Tone.start();
+    padOscA.start();
+    padOscB.start();
+    noise.start();
+    melodyLoop.start(0);
+    Tone.Transport.bpm.value = worlds[worldIndex].bpm;
+    Tone.Transport.start();
+    audioReady = true;
+  } catch (error) {
+    console.log("Audio start failed:", error);
   }
 
-  // --- Occasional color bursts ---
-  if (random() > 0.98) {
-    blendMode(ADD);
-    stroke(random(255), random(255), random(255));
-    strokeWeight(random(1, 3));
-    const y = random(height);
-    line(0, y, width, y);
-    blendMode(BLEND);
+  audioStarting = false;
+}
+
+function mousePressed() {
+  startAudio();
+}
+
+function touchStarted() {
+  startAudio();
+  return false;
+}
+
+function keyPressed() {
+  if (key === "1") chooseWorld(0);
+  if (key === "2") chooseWorld(1);
+  if (key === "3") chooseWorld(2);
+}
+
+function chooseWorld(index) {
+  worldIndex = constrain(index, 0, worlds.length - 1);
+  melodyStep = 0;
+
+  if (audioReady) {
+    Tone.Transport.bpm.rampTo(worlds[worldIndex].bpm, 0.2);
+  }
+}
+
+function updateHandControls() {
+  const sorted = getSortedHands();
+  const leftHand = getHandBySide(sorted, "Left", 0);
+  const rightHand = getHandBySide(sorted, "Right", 1);
+
+  updateLeftHand(leftHand);
+  updateRightHand(rightHand);
+  updateAudioParams();
+}
+
+function updateLeftHand(hand) {
+  if (!isValidHand(hand)) {
+    leftThumbWasUp = false;
+    Object.assign(leftState, {
+      thumb: false,
+      index: false,
+      middle: false,
+      ring: false,
+      pinky: false,
+      pitch: 0,
+      echo: 0,
+      brightness: 0,
+      sparkle: 0,
+    });
+    return;
   }
 
+  const fingers = getFingers(hand);
+
+  if (fingers.thumb && !leftThumbWasUp) {
+    melodyOn = !melodyOn;
+  }
+
+  leftThumbWasUp = fingers.thumb;
+  leftState.thumb = fingers.thumb;
+  leftState.index = fingers.index;
+  leftState.middle = fingers.middle;
+  leftState.ring = fingers.ring;
+  leftState.pinky = fingers.pinky;
+  leftState.pitch = fingers.index ? getFingerLevel(hand, 8) : 0;
+  leftState.echo = fingers.middle ? getFingerLevel(hand, 12) : 0;
+  leftState.brightness = fingers.ring ? getFingerLevel(hand, 16) : 0;
+  leftState.sparkle = fingers.pinky ? getFingerLevel(hand, 20) : 0;
+}
+
+function updateRightHand(hand) {
+  if (!isValidHand(hand)) {
+    resetRightState();
+    return;
+  }
+
+  const fingers = getFingers(hand);
+  const indexTip = hand.keypoints[8];
+  const middleTip = hand.keypoints[12];
+  const ringTip = hand.keypoints[16];
+  const pinkyTip = hand.keypoints[20];
+  const wrist = hand.keypoints[0];
+  const speed = previousMiddleTip ? dist(middleTip.x, middleTip.y, previousMiddleTip.x, previousMiddleTip.y) : 0;
+  const indexPinch = isPinching(hand, 8);
+  const middlePinch = isPinching(hand, 12);
+
+  rightState.index = fingers.index;
+  rightState.indexPinch = indexPinch;
+  rightState.pitch = constrain(map(indexTip.y, height, 0, 0, 1), 0, 1);
+  rightState.pan = constrain(map(indexTip.x, 0, width, -1, 1), -1, 1);
+  rightState.middle = fingers.middle;
+  rightState.middleSpeed = constrain(map(speed, 0, 60, 0, 1), 0, 1);
+  rightState.middleCircle = getCircleGesture(middleTip, wrist);
+  rightState.middlePinch = middlePinch;
+  rightState.ring = fingers.ring;
+  rightState.pad = fingers.ring ? getFingerLevel(hand, 16) : 0;
+  rightState.shimmer = fingers.ring ? constrain(map(ringTip.y, height, 0, 0, 1), 0, 1) : 0;
+  rightState.pinky = fingers.pinky;
+  rightState.chaos = fingers.pinky ? constrain(map(pinkyTip.y, height, 0, 0, 1), 0, 1) : 0;
+  rightState.modifier = getModifier(hand);
+
+  if (audioReady && indexPinch && !rightIndexWasPinched) {
+    triggerLead();
+  }
+
+  if (audioReady && fingers.middle && speed > 24) {
+    kickSynth.triggerAttackRelease(45 + speed * 3, "32n", undefined, 0.28);
+  }
+
+  if (audioReady && fingers.middle && rightState.middleCircle > 0.55 && frameCount % 3 === 0) {
+    glitchSynth.triggerAttackRelease(random([220, 440, 880, 1760]), "64n", undefined, 0.2);
+  }
+
+  if (audioReady && middlePinch && !rightMiddleWasPinched) {
+    triggerRhythmBurst();
+  }
+
+  previousMiddleTip = { x: middleTip.x, y: middleTip.y };
+  rightIndexWasPinched = indexPinch;
+  rightMiddleWasPinched = middlePinch;
+}
+
+function resetRightState() {
+  Object.assign(rightState, {
+    index: false,
+    indexPinch: false,
+    pitch: 0,
+    pan: 0,
+    middle: false,
+    middleSpeed: 0,
+    middleCircle: 0,
+    middlePinch: false,
+    ring: false,
+    pad: 0,
+    shimmer: 0,
+    pinky: false,
+    chaos: 0,
+    modifier: "none",
+  });
+
+  previousMiddleTip = null;
+  previousMiddleAngle = null;
+  circleAmount = 0;
+  rightIndexWasPinched = false;
+  rightMiddleWasPinched = false;
 }
 
 function updateAudioParams() {
-  if (bodyControls.hasHands) {
-    currentDensity = lerp(currentDensity, bodyControls.density, 0.12);
-    currentEntropy = lerp(currentEntropy, bodyControls.entropy, 0.12);
+  if (!echo || !filter || !pan || !padGain || !noiseGain) return;
 
-    lowSine.frequency.value = map(bodyControls.rightX, 0, 1, 55, 220);
-    highSine.frequency.value = map(bodyControls.rightY, 0, 1, 900, 260);
-    reverb.wet.value = lerp(reverb.wet.value, map(bodyControls.rightY, 0, 1, 0.2, 0.85), 0.08);
-    Tone.Transport.bpm.value = map(currentEntropy, 0, 1, 48, 132);
-  } else {
-    currentDensity = map(mouseX, 0, width, 0.15, 0.85);
-    currentEntropy = map(mouseY, height, 0, 0.1, 0.9);
-    lowSine.frequency.value = map(mouseX, 0, width, 55, 220);
-    highSine.frequency.value = map(mouseY, 0, height, 900, 260);
+  const echoAmount = max(leftState.echo, rightState.shimmer * 0.45);
+  const brightAmount = leftState.ring ? leftState.brightness : 0.35;
+  const noiseAmount = max(
+    leftState.pinky ? map(leftState.sparkle, 0, 1, 0.005, 0.08) : 0,
+    rightState.pinky ? map(rightState.chaos, 0, 1, 0.02, 0.2) : 0
+  );
+
+  echo.wet.rampTo(echoAmount, 0.06);
+  echo.feedback.rampTo(map(echoAmount, 0, 1, 0.08, 0.68), 0.06);
+  filter.frequency.rampTo(map(brightAmount, 0, 1, 260, 6200), 0.06);
+  filter.Q.rampTo(map(brightAmount, 0, 1, 0.8, 5), 0.06);
+  pan.pan.rampTo(rightState.pan, 0.04);
+  padGain.gain.rampTo(rightState.ring ? rightState.pad * 0.28 : 0, 0.12);
+  noiseGain.gain.rampTo(noiseAmount, 0.04);
+
+  if (rightState.pinky && audioReady && random() < 0.02 + rightState.chaos * 0.08) {
+    triggerChaos();
   }
 }
 
-function setupBodyTracking() {
-  bodyVideo = createCapture({
-    video: {
-      width: 640,
-      height: 480,
-      facingMode: "user",
-    },
-    audio: false,
-  });
-  bodyVideo.size(640, 480);
-  bodyVideo.hide();
+function triggerLead() {
+  if (!audioReady) return;
 
-  if (typeof Hands === "undefined") {
-    console.log("MediaPipe Hands not loaded. Mouse controls stay active.");
-    return;
+  const baseFrequency = map(rightState.pitch, 0, 1, 90, 2600);
+  let frequency = baseFrequency;
+  let duration = "32n";
+  let velocity = 0.55;
+
+  if (rightState.modifier === "distorted") {
+    velocity = 0.9;
+    duration = "16n";
+    noiseGain.gain.rampTo(0.12, 0.01);
+    noiseGain.gain.rampTo(0.02, 0.08);
   }
 
-  hands = new Hands({
-    locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`,
-  });
-  hands.setOptions({
-    maxNumHands: 2,
-    modelComplexity: 1,
-    minDetectionConfidence: 0.65,
-    minTrackingConfidence: 0.6,
-  });
-  hands.onResults(updateBodyControls);
-  runHandTracking();
-}
+  if (rightState.modifier === "octave") {
+    frequency *= 2;
+  }
 
-async function runHandTracking() {
-  if (!hands || handsRunning || !bodyVideo || !bodyVideo.elt) return;
-  handsRunning = true;
-
-  try {
-    if (bodyVideo.elt.readyState >= 2) {
-      await hands.send({ image: bodyVideo.elt });
+  if (rightState.modifier === "granular") {
+    for (let i = 0; i < 6; i++) {
+      leadSynth.triggerAttackRelease(
+        baseFrequency * random(0.5, 2.5),
+        "64n",
+        Tone.now() + i * 0.018,
+        random(0.18, 0.45)
+      );
     }
-  } catch (error) {
-    console.log("Hand tracking paused:", error);
-  }
-
-  handsRunning = false;
-  requestAnimationFrame(runHandTracking);
-}
-
-function updateBodyControls(results) {
-  const allHands = results.multiHandLandmarks || [];
-  if (!allHands.length) {
-    bodyControls.hasHands = millis() - bodyControls.lastSeen < 1200;
     return;
   }
 
-  // --- MOUTH OPEN DETECTION (stub, replace with real detection) ---
-  // If you have face landmarks, set globalMouthOpen = true/false here
-
-
-
-// --- VOICE SAMPLING LOGIC ---
-async function startVoiceSampling() {
-  isSampling = true;
-  showTalkPrompt = true;
-  await initializeTone();
-  await mic.open();
-  recorder.start();
-  sampleStartTime = millis();
-  setTimeout(stopVoiceSampling, 4000); // 4 seconds
+  leadSynth.triggerAttackRelease(frequency, duration, undefined, velocity);
 }
 
-async function stopVoiceSampling() {
-  showTalkPrompt = false;
-  const recording = await recorder.stop();
-  const arrayBuffer = await recording.arrayBuffer();
-  sampleBuffer = await Tone.getContext().rawContext.decodeAudioData(arrayBuffer);
-  samplePlayer = new Tone.Player(sampleBuffer).toDestination();
-  // Add effects chain for left hand control
-  sampleEffects = new Tone.Filter(800, "lowpass").toDestination();
-  samplePlayer.disconnect();
-  samplePlayer.connect(sampleEffects);
-  sampleRecorded = true;
-  isSampling = false;
-}
+function triggerRhythmBurst() {
+  if (!audioReady) return;
 
-function updateSampleEffects() {
-  // Example: left hand Y controls filter cutoff
-  if (sampleEffects) {
-    const cutoff = map(bodyControls.leftY, 0, 1, 400, 4000);
-    sampleEffects.frequency.value = cutoff;
+  for (let i = 0; i < 5; i++) {
+    glitchSynth.triggerAttackRelease(random([180, 360, 720, 1440]), "64n", Tone.now() + i * 0.045, 0.28);
   }
 }
-  const handedness = results.multiHandedness || [];
-  const leftHand = getHandByLabel(allHands, handedness, "Left") || allHands[0];
-  const rightHand = getHandByLabel(allHands, handedness, "Right") || allHands[1] || leftHand;
-  const leftPalm = getPalmCenter(leftHand);
-  const rightPalm = getPalmCenter(rightHand);
-  const handDistance = dist(leftPalm.x, leftPalm.y, rightPalm.x, rightPalm.y);
-  const density = constrain(map(handDistance, 0.08, 0.7, 0, 1), 0, 1);
-  const movement = dist(leftPalm.x, leftPalm.y, previousLeftX, previousLeftY)
-    + dist(rightPalm.x, rightPalm.y, previousRightX, previousRightY);
 
-  previousLeftX = leftPalm.x;
-  previousLeftY = leftPalm.y;
-  previousRightX = rightPalm.x;
-  previousRightY = rightPalm.y;
+function triggerChaos() {
+  if (!audioReady) return;
 
-  bodyControls.hasHands = true;
-  bodyControls.lastSeen = millis();
-  bodyControls.density = lerp(bodyControls.density, density, 0.18);
-  bodyControls.entropy = lerp(bodyControls.entropy, constrain(map(movement, 0, 0.12, 0, 1), 0, 1), 0.24);
-  bodyControls.handDistance = lerp(bodyControls.handDistance, handDistance, 0.18);
-  bodyControls.leftX = lerp(bodyControls.leftX, 1 - leftPalm.x, 0.2);
-  bodyControls.leftY = lerp(bodyControls.leftY, leftPalm.y, 0.2);
-  bodyControls.rightX = lerp(bodyControls.rightX, 1 - rightPalm.x, 0.2);
-  bodyControls.rightY = lerp(bodyControls.rightY, rightPalm.y, 0.2);
-  bodyControls.fingers = getFingerStates(leftHand);
+  const frequency = random([110, 220, 440, 880, 1760, 3520]);
+  const duration = random(["64n", "32n"]);
+  glitchSynth.triggerAttackRelease(frequency, duration, undefined, random(0.1, 0.5));
 }
 
-function getHandByLabel(allHands, handedness, label) {
-  for (let i = 0; i < handedness.length; i++) {
-    if (handedness[i].label === label) return allHands[i];
+function drawHands() {
+  const sorted = getSortedHands();
+
+  for (let i = 0; i < sorted.length; i++) {
+    const hand = sorted[i];
+    const isLeft = i === 0;
+    const pointColor = isLeft ? color(0, 210, 255) : color(255, 80, 180);
+    const lineColor = isLeft ? color(0, 210, 255, 150) : color(255, 80, 180, 150);
+
+    stroke(lineColor);
+    strokeWeight(3);
+    for (let j = 0; j < connections.length; j++) {
+      const a = hand.keypoints[connections[j][0]];
+      const b = hand.keypoints[connections[j][1]];
+      line(a.x, a.y, b.x, b.y);
+    }
+
+    noStroke();
+    fill(pointColor);
+    for (let j = 0; j < hand.keypoints.length; j++) {
+      circle(hand.keypoints[j].x, hand.keypoints[j].y, 10);
+    }
+
+    const wrist = hand.keypoints[0];
+    const label = isLeft ? "Left controls" : "Right performance";
+    textSize(13);
+    fill(pointColor);
+    rect(wrist.x - 8, wrist.y - 34, textWidth(label) + 18, 24, 4);
+    fill(0);
+    textAlign(LEFT, CENTER);
+    text(label, wrist.x, wrist.y - 22);
   }
-  return null;
 }
 
-function getPalmCenter(hand) {
-  return {
-    x: (hand[0].x + hand[5].x + hand[17].x) / 3,
-    y: (hand[0].y + hand[5].y + hand[17].y) / 3,
-  };
+function drawPanels() {
+  noStroke();
+  fill(0, 180);
+  rect(12, 12, 240, 100, 6);
+  fill(255);
+  textSize(14);
+  textAlign(LEFT, TOP);
+  text("Ikeda Hand Sampler", 24, 24);
+  text(audioReady ? "Audio ready" : "Click canvas to start audio", 24, 46);
+  text("World " + (worldIndex + 1) + ": " + worlds[worldIndex].name, 24, 68);
+  text("Hands detected: " + hands.length, 24, 90);
+
+  const x = width - 260;
+  const y = 12;
+  fill(0, 180);
+  rect(x, y, 248, 318, 6);
+  fill(255);
+  textSize(14);
+  text("Left hand", x + 14, y + 14);
+  drawRow("Thumb", melodyOn ? "melody on" : "melody off", leftState.thumb, melodyOn ? 1 : 0, x + 14, y + 40);
+  drawRow("Index", "pitch", leftState.index, leftState.pitch, x + 14, y + 62);
+  drawRow("Middle", "echo", leftState.middle, leftState.echo, x + 14, y + 84);
+  drawRow("Ring", "brightness", leftState.ring, leftState.brightness, x + 14, y + 106);
+  drawRow("Pinky", "sparkle", leftState.pinky, leftState.sparkle, x + 14, y + 128);
+
+  fill(255);
+  textSize(14);
+  text("Right hand", x + 14, y + 166);
+  textSize(12);
+  text("Thumb mode: " + rightState.modifier, x + 14, y + 187);
+  drawRow("Index", "lead", rightState.indexPinch, rightState.pitch, x + 14, y + 210);
+  drawRow("Middle", "glitch", rightState.middle, max(rightState.middleSpeed, rightState.middleCircle), x + 14, y + 232);
+  drawRow("Ring", "pad", rightState.ring, rightState.pad, x + 14, y + 254);
+  drawRow("Pinky", "chaos", rightState.pinky, rightState.chaos, x + 14, y + 276);
 }
 
-function getFingerStates(hand) {
-  return {
-    thumb: isFingerOpen(hand, 4, 2),
-    index: isFingerOpen(hand, 8, 6),
-    middle: isFingerOpen(hand, 12, 10),
-    ring: isFingerOpen(hand, 16, 14),
-    pinky: isFingerOpen(hand, 20, 18),
-  };
+function drawRow(name, label, active, level, x, y) {
+  fill(active ? color(0, 210, 255) : color(80));
+  circle(x + 6, y + 7, 9);
+  fill(255);
+  textSize(12);
+  textAlign(LEFT, TOP);
+  text(name + " - " + label, x + 18, y);
+  fill(65);
+  rect(x + 146, y + 3, 72, 7, 3);
+  fill(active ? color(255, 80, 180) : color(130));
+  rect(x + 146, y + 3, 72 * constrain(level, 0, 1), 7, 3);
 }
 
-function isFingerOpen(hand, tipIndex, jointIndex) {
-  const wrist = hand[0];
-  const tip = hand[tipIndex];
-  const joint = hand[jointIndex];
-  return dist(tip.x, tip.y, wrist.x, wrist.y) > dist(joint.x, joint.y, wrist.x, wrist.y) + 0.035;
+function getSortedHands() {
+  return hands
+    .slice()
+    .filter(isValidHand)
+    .sort((a, b) => getHandCenterX(a) - getHandCenterX(b));
 }
 
-function getBandEnergy(spectrum, start, end) {
+function isValidHand(hand) {
+  if (!hand || !hand.keypoints || hand.keypoints.length < 21) return false;
+
+  for (let i = 0; i < 21; i++) {
+    const point = hand.keypoints[i];
+    if (!point || !Number.isFinite(point.x) || !Number.isFinite(point.y)) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
+function getHandBySide(sortedHands, label, fallbackIndex) {
+  const hasHandednessLabels = sortedHands.some((hand) => hand.handedness);
+
+  for (let i = 0; i < sortedHands.length; i++) {
+    if (sortedHands[i].handedness === label) {
+      return sortedHands[i];
+    }
+  }
+
+  if (hasHandednessLabels) {
+    return null;
+  }
+
+  return sortedHands[fallbackIndex] || null;
+}
+
+function getHandCenterX(hand) {
+  if (!isValidHand(hand)) return width / 2;
+
   let total = 0;
-  let count = 0;
 
-  for (let i = start; i < end; i++) {
-    total += constrain(map(spectrum[i], -100, -20, 0, 1), 0, 1);
-    count++;
+  for (let i = 0; i < hand.keypoints.length; i++) {
+    total += hand.keypoints[i].x;
   }
 
-  return count ? total / count : 0;
+  return total / hand.keypoints.length;
 }
 
-async function keyPressed() {
-  if (key === 'f' || key === 'F') {
-    let fs = fullscreen();
-    fullscreen(!fs);
+function getFingers(hand) {
+  return {
+    thumb: isFingerUp(hand, 4, 2),
+    index: isFingerUp(hand, 8, 6),
+    middle: isFingerUp(hand, 12, 10),
+    ring: isFingerUp(hand, 16, 14),
+    pinky: isFingerUp(hand, 20, 18),
+  };
+}
+
+function isFingerUp(hand, tipIndex, jointIndex) {
+  const tip = hand.keypoints[tipIndex];
+  const joint = hand.keypoints[jointIndex];
+
+  return tip.y < joint.y - 12;
+}
+
+function getFingerLevel(hand, tipIndex) {
+  const tip = hand.keypoints[tipIndex];
+  const wrist = hand.keypoints[0];
+
+  return constrain(map(tip.y, wrist.y + 40, wrist.y - 190, 0, 1), 0, 1);
+}
+
+function isPinching(hand, tipIndex) {
+  const thumb = hand.keypoints[4];
+  const tip = hand.keypoints[tipIndex];
+
+  return dist(thumb.x, thumb.y, tip.x, tip.y) < pinchDistance;
+}
+
+function getModifier(hand) {
+  if (isPinching(hand, 12)) return "distorted";
+  if (isPinching(hand, 16)) return "octave";
+  if (isPinching(hand, 20)) return "granular";
+  if (isPinching(hand, 8)) return "normal";
+
+  return "none";
+}
+
+function getCircleGesture(point, center) {
+  const angle = atan2(point.y - center.y, point.x - center.x);
+
+  if (previousMiddleAngle === null) {
+    previousMiddleAngle = angle;
+    return 0;
   }
 
-  if (key === " ") {
-    if (!isPlaying) {
-      await initializeTone();
-      loop.start(0);
-      Tone.Transport.start();
-      isPlaying = true;
-    } else {
-      loop.stop();
-      Tone.Transport.stop();
-      lowGain.gain.value = 0;
-      highGain.gain.value = 0;
-      noiseGain.gain.value = 0;
-      isPlaying = false;
-    }
-  }
-}
+  let delta = angle - previousMiddleAngle;
+  if (delta > PI) delta -= TWO_PI;
+  if (delta < -PI) delta += TWO_PI;
 
-async function initializeTone() {
-  if (toneReady) return;
-  await Tone.start();
-  await Tone.loaded();
-  lowSine.start();
-  highSine.start();
-  whiteNoise.start();
-  Tone.Transport.bpm.value = 64;
-  toneReady = true;
-  console.log("audio context started");
-}
+  previousMiddleAngle = angle;
+  circleAmount = constrain(circleAmount * 0.92 + abs(delta) * 0.65, 0, 1);
 
-function windowResized() {
-  resizeCanvas(windowWidth, windowHeight);
+  return circleAmount;
 }
