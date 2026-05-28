@@ -2,82 +2,68 @@ let video;
 let handPose;
 let hands = [];
 let audioReady = false;
-let audioStarting = false;
-let melodyOn = false;
-let leftThumbWasUp = false;
-let melodyStep = 0;
-let worldIndex = 0;
+let activeLayerKey = null;
+let previousActiveLayerKey = null;
+let leftThumbWasOpen = false;
 
-let melodySynth;
-let leadSynth;
-let glitchSynth;
-let kickSynth;
-let padOscA;
-let padOscB;
-let padGain;
+let master;
+let masterFilter;
+let reverb;
+let delay;
+let crusher;
+let distortion;
+let droneSubOsc;
+let droneSubGain;
+let highSignalOsc;
+let highSignalGain;
+let clickOsc;
+let clickGain;
+let noiseBurst;
+let noiseFilter;
+let staticFilter;
+let staticGain;
+let errorOsc;
+let errorGain;
 let noise;
 let noiseGain;
-let filter;
-let echo;
-let pan;
-let masterGain;
-let melodyLoop;
+let loops = {};
 
-let previousMiddleTip = null;
-let previousMiddleAngle = null;
-let circleAmount = 0;
-let rightIndexWasPinched = false;
-let rightMiddleWasPinched = false;
+const canvasW = 960;
+const canvasH = 620;
+const stillThreshold = 3.2;
+const stillSaveTime = 2000;
+const parameterLoopLength = 4000;
+const parameterRecordInterval = 60;
+const pentatonic = [0, 3, 5, 7, 10, 12, 15, 17, 19, 22, 24];
+const subFrequencies = [31, 37, 43, 53, 61, 79];
+const machineFrequencies = [731, 947, 1129, 1471, 1999, 2879, 4093, 6151, 7901];
+const layerOrder = ["thumb", "index", "middle", "ring", "pinky"];
 
-const canvasW = 640;
-const canvasH = 480;
-const pinchDistance = 34;
+const fingerTips = { thumb: 4, index: 8, middle: 12, ring: 16, pinky: 20 };
+const fingerJoints = { thumb: 2, index: 6, middle: 10, ring: 14, pinky: 18 };
 
-const worlds = [
-  {
-    name: "Data Pulse",
-    bpm: 132,
-    notes: [880, 1760, 1320, 990, 2200, 660, 1760, 1100, 0, 2640, 880, 0],
-  },
-  {
-    name: "Glass Grid",
-    bpm: 108,
-    notes: [523, 784, 1046, 1568, 2093, 1568, 1046, 784, 0, 1175, 1760, 0],
-  },
-  {
-    name: "Low Signal",
-    bpm: 96,
-    notes: [55, 110, 220, 0, 165, 330, 0, 440, 82, 165, 247, 0],
-  },
-];
-
-const leftState = {
-  thumb: false,
-  index: false,
-  middle: false,
-  ring: false,
-  pinky: false,
-  pitch: 0,
-  echo: 0,
-  brightness: 0,
-  sparkle: 0,
+const layerNames = {
+  thumb: "Drone / Foundation",
+  index: "Melody / Voice",
+  middle: "Rhythm / Pulse",
+  ring: "Space / Atmosphere",
+  pinky: "Chaos / Transformation",
 };
 
-const rightState = {
-  index: false,
-  indexPinch: false,
-  pitch: 0,
-  pan: 0,
-  middle: false,
-  middleSpeed: 0,
-  middleCircle: 0,
-  middlePinch: false,
-  ring: false,
-  pad: 0,
-  shimmer: 0,
-  pinky: false,
-  chaos: 0,
-  modifier: "none",
+const layerShortNames = {
+  thumb: "DRONE",
+  index: "MELODY",
+  middle: "RHYTHM",
+  ring: "SPACE",
+  pinky: "CHAOS",
+};
+
+const layerColors = {
+  thumb: [120, 255, 0],
+  index: [255, 42, 185],
+  middle: [35, 80, 255],
+  ring: [165, 70, 255],
+  pinky: [255, 225, 0],
 };
 
 const connections = [
@@ -89,6 +75,10 @@ const connections = [
   [5, 9], [9, 13], [13, 17],
 ];
 
+let layers = {};
+let particles = [];
+let savedBlocks = [];
+
 function preload() {
   handPose = ml5.handPose({
     flipped: true,
@@ -98,6 +88,8 @@ function preload() {
 
 function setup() {
   createCanvas(canvasW, canvasH);
+  pixelDensity(1);
+  textFont("monospace");
 
   video = createCapture(VIDEO);
   video.size(canvasW, canvasH);
@@ -107,97 +99,122 @@ function setup() {
     hands = results.slice(0, 2);
   });
 
-  setupAudio();
+  setupLayers();
+  setupTone();
+}
+
+function setupLayers() {
+  for (const key of layerOrder) {
+    layers[key] = {
+      key,
+      name: layerNames[key],
+      saved: false,
+      playing: false,
+      stillSince: null,
+      lastTip: null,
+      saveFlash: 0,
+      params: {
+        pitch: 0.35,
+        intensity: 0.25,
+        modulation: 0.25,
+        space: 0.2,
+        chaos: 0.08,
+      },
+      target: {
+        pitch: 0.35,
+        intensity: 0.25,
+        modulation: 0.25,
+        space: 0.2,
+        chaos: 0.08,
+      },
+      savedParams: null,
+      recording: [],
+      savedPattern: null,
+      savedAt: 0,
+      lastRecordTime: 0,
+    };
+  }
+}
+
+function setupTone() {
+  master = new Tone.Gain(0.62).toDestination();
+  masterFilter = new Tone.Filter(9000, "highpass").connect(master);
+  reverb = new Tone.Reverb({ decay: 1.6, wet: 0.08 }).connect(master);
+  delay = new Tone.FeedbackDelay("32n", 0.18).connect(reverb);
+  distortion = new Tone.Distortion(0.18).connect(delay);
+  crusher = new Tone.BitCrusher(6).connect(distortion);
+
+  droneSubGain = new Tone.Gain(0).connect(master);
+  droneSubOsc = new Tone.Oscillator({ type: "square", frequency: 43 }).connect(droneSubGain);
+
+  highSignalGain = new Tone.Gain(0).connect(delay);
+  highSignalOsc = new Tone.Oscillator({ type: "square", frequency: 4093 }).connect(highSignalGain);
+
+  clickGain = new Tone.Gain(0).connect(master);
+  clickOsc = new Tone.Oscillator({ type: "square", frequency: 1200 }).connect(clickGain);
+
+  noiseBurst = new Tone.NoiseSynth({
+    noise: { type: "white" },
+    envelope: { attack: 0.001, decay: 0.035, sustain: 0, release: 0.02 },
+  });
+  noiseFilter = new Tone.Filter(8000, "highpass").connect(delay);
+  noiseBurst.connect(noiseFilter);
+
+  errorGain = new Tone.Gain(0).connect(crusher);
+  errorOsc = new Tone.Oscillator({ type: "sawtooth", frequency: 2300 }).connect(errorGain);
+
+  noise = new Tone.Noise("white");
+  staticFilter = new Tone.Filter(8000, "highpass");
+  staticGain = new Tone.Gain(0).connect(delay);
+  noiseGain = new Tone.Gain(0).connect(crusher);
+  noise.connect(staticFilter);
+  staticFilter.connect(staticGain);
+  staticFilter.connect(noiseGain);
+
+  loops.thumb = new Tone.Loop((time) => playDrone(time), "8n");
+  loops.index = new Tone.Loop((time) => playMelody(time), "16n");
+  loops.middle = new Tone.Loop((time) => playRhythm(time), "32n");
+  loops.ring = new Tone.Loop((time) => playSpace(time), "16n");
+  loops.pinky = new Tone.Loop((time) => playChaos(time), "32n");
 }
 
 function draw() {
-  background(8);
+  drawAbstractBackground();
 
-  push();
-  translate(width, 0);
-  scale(-1, 1);
-  image(video, 0, 0, width, height);
-  pop();
+  const sorted = getSortedHands();
+  const leftHand = getHandBySide(sorted, "Left", 0);
+  const rightHand = getHandBySide(sorted, "Right", 1);
+  const activeFinger = getActiveRightFinger(rightHand);
 
-  updateHandControls();
-  drawHands();
-  drawPanels();
-}
+  activeLayerKey = activeFinger ? activeFinger.key : null;
+  if (activeLayerKey !== previousActiveLayerKey) resetStillTracking();
+  previousActiveLayerKey = activeLayerKey;
 
-function setupAudio() {
-  masterGain = new Tone.Gain(0.7).toDestination();
-  filter = new Tone.Filter(1400, "lowpass").connect(masterGain);
-  echo = new Tone.FeedbackDelay("16n", 0.18).connect(filter);
-  pan = new Tone.Panner(0).connect(echo);
+  updateLayerTargets(leftHand);
+  updateLayerSmoothing();
+  recordActiveLayerParams();
+  updateFreezeLogic(activeFinger, leftHand);
+  updateToneParameters();
 
-  melodySynth = new Tone.Synth({
-    oscillator: { type: "sine" },
-    envelope: { attack: 0.001, decay: 0.04, sustain: 0.02, release: 0.06 },
-  }).connect(pan);
-
-  leadSynth = new Tone.Synth({
-    oscillator: { type: "square" },
-    envelope: { attack: 0.001, decay: 0.05, sustain: 0.01, release: 0.08 },
-  }).connect(pan);
-
-  glitchSynth = new Tone.Synth({
-    oscillator: { type: "triangle" },
-    envelope: { attack: 0.001, decay: 0.025, sustain: 0, release: 0.03 },
-  }).connect(filter);
-
-  kickSynth = new Tone.MembraneSynth({
-    pitchDecay: 0.008,
-    octaves: 4,
-    envelope: { attack: 0.001, decay: 0.12, sustain: 0, release: 0.02 },
-  }).connect(filter);
-
-  padGain = new Tone.Gain(0).connect(filter);
-  padOscA = new Tone.Oscillator(110, "sine").connect(padGain);
-  padOscB = new Tone.Oscillator(165, "sine").connect(padGain);
-
-  noiseGain = new Tone.Gain(0).connect(filter);
-  noise = new Tone.Noise("white").connect(noiseGain);
-
-  echo.wet.value = 0;
-  filter.Q.value = 1;
-
-  melodyLoop = new Tone.Loop((time) => {
-    if (!melodyOn) return;
-
-    const world = worlds[worldIndex];
-    const base = world.notes[melodyStep % world.notes.length];
-    melodyStep++;
-
-    if (base > 0) {
-      const shifted = base * pow(2, map(leftState.pitch, 0, 1, -12, 12) / 12);
-      melodySynth.triggerAttackRelease(shifted, "32n", time, 0.5);
-    }
-
-    if (leftState.pinky && random() < 0.1 + leftState.sparkle * 0.35) {
-      glitchSynth.triggerAttackRelease(random([880, 1760, 2640, 3520]), "64n", time, 0.25);
-    }
-  }, "8n");
+  drawSavedBlocks();
+  drawParticles();
+  drawHands(sorted, activeFinger, leftHand);
+  drawInterface(activeFinger);
 }
 
 async function startAudio() {
-  if (audioReady || audioStarting) return;
-
-  audioStarting = true;
-
-  try {
-    await Tone.start();
-    padOscA.start();
-    padOscB.start();
-    noise.start();
-    melodyLoop.start(0);
-    Tone.Transport.bpm.value = worlds[worldIndex].bpm;
-    Tone.Transport.start();
-    audioReady = true;
-  } catch (error) {
-    console.log("Audio start failed:", error);
-  }
-
-  audioStarting = false;
+  if (audioReady) return;
+  await Tone.start();
+  await Tone.loaded();
+  droneSubOsc.start();
+  highSignalOsc.start();
+  clickOsc.start();
+  errorOsc.start();
+  noise.start();
+  Tone.Transport.bpm.value = 96;
+  Tone.Transport.start();
+  for (const key of layerOrder) loops[key].start(0);
+  audioReady = true;
 }
 
 function mousePressed() {
@@ -210,400 +227,472 @@ function touchStarted() {
 }
 
 function keyPressed() {
-  if (key === "1") chooseWorld(0);
-  if (key === "2") chooseWorld(1);
-  if (key === "3") chooseWorld(2);
+  startAudio();
+  if (key === "s" || key === "S") saveActiveLayer();
 }
 
-function chooseWorld(index) {
-  worldIndex = constrain(index, 0, worlds.length - 1);
-  melodyStep = 0;
+function updateLayerTargets(leftHand) {
+  if (!activeLayerKey || !isValidHand(leftHand)) return;
 
-  if (audioReady) {
-    Tone.Transport.bpm.rampTo(worlds[worldIndex].bpm, 0.2);
+  const layer = layers[activeLayerKey];
+  const openness = getFingerOpenness(leftHand);
+  const palm = getPalmCenter(leftHand);
+  const basePitch = constrain(map(palm.y, height * 0.85, height * 0.12, 0, 1), 0, 1);
+
+  layer.target.pitch = lerp(layer.target.pitch, basePitch, 0.12);
+  layer.target.intensity = lerp(layer.target.intensity, openness.index, 0.18);
+  layer.target.modulation = lerp(layer.target.modulation, openness.middle, 0.18);
+  layer.target.space = lerp(layer.target.space, openness.ring, 0.18);
+  layer.target.chaos = lerp(layer.target.chaos, openness.pinky, 0.18);
+
+  createLeftHandParticles(leftHand, openness);
+}
+
+function updateLayerSmoothing() {
+  for (const key of layerOrder) {
+    const layer = layers[key];
+    for (const param of Object.keys(layer.params)) {
+      layer.params[param] = lerp(layer.params[param], layer.target[param], 0.08);
+    }
+    layer.saveFlash *= 0.9;
   }
 }
 
-function updateHandControls() {
-  const sorted = getSortedHands();
-  const leftHand = getHandBySide(sorted, "Left", 0);
-  const rightHand = getHandBySide(sorted, "Right", 1);
+function recordActiveLayerParams() {
+  if (!activeLayerKey) return;
 
-  updateLeftHand(leftHand);
-  updateRightHand(rightHand);
-  updateAudioParams();
-}
+  const layer = layers[activeLayerKey];
+  const now = millis();
 
-function updateLeftHand(hand) {
-  if (!isValidHand(hand)) {
-    leftThumbWasUp = false;
-    Object.assign(leftState, {
-      thumb: false,
-      index: false,
-      middle: false,
-      ring: false,
-      pinky: false,
-      pitch: 0,
-      echo: 0,
-      brightness: 0,
-      sparkle: 0,
-    });
-    return;
-  }
+  if (now - layer.lastRecordTime < parameterRecordInterval) return;
 
-  const fingers = getFingers(hand);
-
-  if (fingers.thumb && !leftThumbWasUp) {
-    melodyOn = !melodyOn;
-  }
-
-  leftThumbWasUp = fingers.thumb;
-  leftState.thumb = fingers.thumb;
-  leftState.index = fingers.index;
-  leftState.middle = fingers.middle;
-  leftState.ring = fingers.ring;
-  leftState.pinky = fingers.pinky;
-  leftState.pitch = fingers.index ? getFingerLevel(hand, 8) : 0;
-  leftState.echo = fingers.middle ? getFingerLevel(hand, 12) : 0;
-  leftState.brightness = fingers.ring ? getFingerLevel(hand, 16) : 0;
-  leftState.sparkle = fingers.pinky ? getFingerLevel(hand, 20) : 0;
-}
-
-function updateRightHand(hand) {
-  if (!isValidHand(hand)) {
-    resetRightState();
-    return;
-  }
-
-  const fingers = getFingers(hand);
-  const indexTip = hand.keypoints[8];
-  const middleTip = hand.keypoints[12];
-  const ringTip = hand.keypoints[16];
-  const pinkyTip = hand.keypoints[20];
-  const wrist = hand.keypoints[0];
-  const speed = previousMiddleTip ? dist(middleTip.x, middleTip.y, previousMiddleTip.x, previousMiddleTip.y) : 0;
-  const indexPinch = isPinching(hand, 8);
-  const middlePinch = isPinching(hand, 12);
-
-  rightState.index = fingers.index;
-  rightState.indexPinch = indexPinch;
-  rightState.pitch = constrain(map(indexTip.y, height, 0, 0, 1), 0, 1);
-  rightState.pan = constrain(map(indexTip.x, 0, width, -1, 1), -1, 1);
-  rightState.middle = fingers.middle;
-  rightState.middleSpeed = constrain(map(speed, 0, 60, 0, 1), 0, 1);
-  rightState.middleCircle = getCircleGesture(middleTip, wrist);
-  rightState.middlePinch = middlePinch;
-  rightState.ring = fingers.ring;
-  rightState.pad = fingers.ring ? getFingerLevel(hand, 16) : 0;
-  rightState.shimmer = fingers.ring ? constrain(map(ringTip.y, height, 0, 0, 1), 0, 1) : 0;
-  rightState.pinky = fingers.pinky;
-  rightState.chaos = fingers.pinky ? constrain(map(pinkyTip.y, height, 0, 0, 1), 0, 1) : 0;
-  rightState.modifier = getModifier(hand);
-
-  if (audioReady && indexPinch && !rightIndexWasPinched) {
-    triggerLead();
-  }
-
-  if (audioReady && fingers.middle && speed > 24) {
-    kickSynth.triggerAttackRelease(45 + speed * 3, "32n", undefined, 0.28);
-  }
-
-  if (audioReady && fingers.middle && rightState.middleCircle > 0.55 && frameCount % 3 === 0) {
-    glitchSynth.triggerAttackRelease(random([220, 440, 880, 1760]), "64n", undefined, 0.2);
-  }
-
-  if (audioReady && middlePinch && !rightMiddleWasPinched) {
-    triggerRhythmBurst();
-  }
-
-  previousMiddleTip = { x: middleTip.x, y: middleTip.y };
-  rightIndexWasPinched = indexPinch;
-  rightMiddleWasPinched = middlePinch;
-}
-
-function resetRightState() {
-  Object.assign(rightState, {
-    index: false,
-    indexPinch: false,
-    pitch: 0,
-    pan: 0,
-    middle: false,
-    middleSpeed: 0,
-    middleCircle: 0,
-    middlePinch: false,
-    ring: false,
-    pad: 0,
-    shimmer: 0,
-    pinky: false,
-    chaos: 0,
-    modifier: "none",
+  layer.recording.push({
+    t: now,
+    params: { ...layer.params },
   });
 
-  previousMiddleTip = null;
-  previousMiddleAngle = null;
-  circleAmount = 0;
-  rightIndexWasPinched = false;
-  rightMiddleWasPinched = false;
+  while (layer.recording.length && now - layer.recording[0].t > parameterLoopLength) {
+    layer.recording.shift();
+  }
+
+  layer.lastRecordTime = now;
 }
 
-function updateAudioParams() {
-  if (!echo || !filter || !pan || !padGain || !noiseGain) return;
+function updateFreezeLogic(activeFinger, leftHand) {
+  if (!activeLayerKey || !activeFinger) return;
 
-  const echoAmount = max(leftState.echo, rightState.shimmer * 0.45);
-  const brightAmount = leftState.ring ? leftState.brightness : 0.35;
-  const noiseAmount = max(
-    leftState.pinky ? map(leftState.sparkle, 0, 1, 0.005, 0.08) : 0,
-    rightState.pinky ? map(rightState.chaos, 0, 1, 0.02, 0.2) : 0
-  );
+  const layer = layers[activeLayerKey];
+  const tip = activeFinger.point;
 
-  echo.wet.rampTo(echoAmount, 0.06);
-  echo.feedback.rampTo(map(echoAmount, 0, 1, 0.08, 0.68), 0.06);
-  filter.frequency.rampTo(map(brightAmount, 0, 1, 260, 6200), 0.06);
-  filter.Q.rampTo(map(brightAmount, 0, 1, 0.8, 5), 0.06);
-  pan.pan.rampTo(rightState.pan, 0.04);
-  padGain.gain.rampTo(rightState.ring ? rightState.pad * 0.28 : 0, 0.12);
-  noiseGain.gain.rampTo(noiseAmount, 0.04);
-
-  if (rightState.pinky && audioReady && random() < 0.02 + rightState.chaos * 0.08) {
-    triggerChaos();
-  }
-}
-
-function triggerLead() {
-  if (!audioReady) return;
-
-  const baseFrequency = map(rightState.pitch, 0, 1, 90, 2600);
-  let frequency = baseFrequency;
-  let duration = "32n";
-  let velocity = 0.55;
-
-  if (rightState.modifier === "distorted") {
-    velocity = 0.9;
-    duration = "16n";
-    noiseGain.gain.rampTo(0.12, 0.01);
-    noiseGain.gain.rampTo(0.02, 0.08);
-  }
-
-  if (rightState.modifier === "octave") {
-    frequency *= 2;
-  }
-
-  if (rightState.modifier === "granular") {
-    for (let i = 0; i < 6; i++) {
-      leadSynth.triggerAttackRelease(
-        baseFrequency * random(0.5, 2.5),
-        "64n",
-        Tone.now() + i * 0.018,
-        random(0.18, 0.45)
-      );
-    }
+  if (!layer.lastTip) {
+    layer.lastTip = { x: tip.x, y: tip.y };
+    layer.stillSince = millis();
     return;
   }
 
-  leadSynth.triggerAttackRelease(frequency, duration, undefined, velocity);
+  const movement = dist(tip.x, tip.y, layer.lastTip.x, layer.lastTip.y);
+  if (movement < stillThreshold) {
+    if (layer.stillSince === null) layer.stillSince = millis();
+    if (millis() - layer.stillSince > stillSaveTime && !layer.saved) saveLayer(activeLayerKey);
+  } else {
+    layer.stillSince = millis();
+  }
+
+  layer.lastTip = lerpPoint(layer.lastTip, tip, 0.3);
+
+  const leftThumbOpen = isValidHand(leftHand) && getFingerOpenAmount(leftHand, "thumb") > 0.58;
+  if (leftThumbOpen && !leftThumbWasOpen) saveActiveLayer();
+  leftThumbWasOpen = leftThumbOpen;
 }
 
-function triggerRhythmBurst() {
+function saveActiveLayer() {
+  if (!activeLayerKey) return;
+  saveLayer(activeLayerKey);
+}
+
+function saveLayer(key) {
+  const layer = layers[key];
+  const now = millis();
+  const recentRecording = layer.recording.filter((point) => now - point.t <= parameterLoopLength);
+
+  layer.saved = true;
+  layer.playing = true;
+  layer.savedParams = { ...layer.params };
+  layer.savedPattern = recentRecording.length
+    ? recentRecording.map((point) => ({
+        t: point.t - recentRecording[0].t,
+        params: { ...point.params },
+      }))
+    : [{ t: 0, params: { ...layer.params } }];
+  layer.savedAt = now;
+  layer.saveFlash = 1;
+  createSavedBlock(key, layer.savedParams);
+}
+
+function updateToneParameters() {
   if (!audioReady) return;
 
-  for (let i = 0; i < 5; i++) {
-    glitchSynth.triggerAttackRelease(random([180, 360, 720, 1440]), "64n", Tone.now() + i * 0.045, 0.28);
+  const space = getPlaybackParams("ring");
+  const chaos = getPlaybackParams("pinky");
+  const drone = getPlaybackParams("thumb");
+
+  const wet = space ? map(space.space + space.intensity, 0, 2, 0.02, 0.42) : 0.05;
+  const feedback = space ? map(space.modulation, 0, 1, 0.04, 0.45) : 0.14;
+  const crush = chaos ? floor(map(chaos.chaos, 0, 1, 8, 2)) : 8;
+  const damage = chaos ? map(chaos.intensity + chaos.chaos, 0, 2, 0.02, 0.75) : 0.12;
+  const cutoff = drone ? map(drone.intensity + drone.pitch, 0, 2, 11000, 1800) : 9000;
+
+  reverb.wet.rampTo(wet, 0.12);
+  delay.feedback.rampTo(feedback, 0.12);
+  crusher.bits = crush;
+  distortion.distortion = damage;
+  masterFilter.frequency.rampTo(cutoff, 0.12);
+  staticGain.gain.rampTo(space ? map(space.intensity + space.space, 0, 2, 0.002, 0.055) : 0, 0.12);
+  noiseGain.gain.rampTo(chaos ? map(chaos.chaos, 0, 1, 0.003, 0.14) : 0, 0.08);
+}
+
+function getPlaybackParams(key) {
+  const layer = layers[key];
+  if (activeLayerKey === key) return layer.params;
+  if (layer.saved && layer.savedPattern) return getPatternParams(layer);
+  if (layer.saved && layer.savedParams) return layer.savedParams;
+  return null;
+}
+
+function getPatternParams(layer) {
+  if (!layer.savedPattern || !layer.savedPattern.length) return layer.savedParams;
+
+  const loopPosition = (millis() - layer.savedAt) % parameterLoopLength;
+  let current = layer.savedPattern[0];
+
+  for (let i = 1; i < layer.savedPattern.length; i++) {
+    if (layer.savedPattern[i].t > loopPosition) break;
+    current = layer.savedPattern[i];
+  }
+
+  return current.params;
+}
+
+function playDrone(time) {
+  const p = getPlaybackParams("thumb");
+  if (!p) return;
+  if (random() > map(p.intensity, 0, 1, 0.18, 0.82)) return;
+
+  const sub = random(subFrequencies);
+  const high = random(machineFrequencies);
+  const subVelocity = map(p.intensity, 0, 1, 0.06, 0.32);
+  const highVelocity = map(p.chaos + p.modulation, 0, 2, 0.015, 0.14);
+
+  triggerGate(droneSubOsc, droneSubGain, sub, random([0.025, 0.05, 0.09]), time, subVelocity);
+  if (random() < 0.2 + p.modulation * 0.45) {
+    triggerGate(highSignalOsc, highSignalGain, high, 0.018, time + random(0, 0.03), highVelocity);
+  }
+  loops.thumb.interval = random() < p.chaos ? "16n" : random(["8n", "4n"]);
+}
+
+function playMelody(time) {
+  const p = getPlaybackParams("index");
+  if (!p) return;
+  if (random() > map(p.intensity, 0, 1, 0.08, 0.9)) return;
+
+  const note = random(machineFrequencies);
+  const velocity = map(p.intensity, 0, 1, 0.05, 0.34);
+  triggerGate(highSignalOsc, highSignalGain, note, random([0.012, 0.02, 0.035]), time, velocity);
+  if (random() < p.modulation * 0.5) {
+    triggerGate(highSignalOsc, highSignalGain, random(machineFrequencies), 0.012, time + 0.025, velocity * 0.7);
+  }
+  loops.index.interval = random() < p.chaos ? "64n" : random(["32n", "16n", "8n"]);
+}
+
+function triggerGate(oscillator, gainNode, frequency, duration, time, velocity) {
+  oscillator.frequency.setValueAtTime(frequency, time);
+  gainNode.gain.cancelScheduledValues(time);
+  gainNode.gain.setValueAtTime(0, time);
+  gainNode.gain.linearRampToValueAtTime(velocity, time + 0.001);
+  gainNode.gain.exponentialRampToValueAtTime(0.0001, time + duration);
+  gainNode.gain.setValueAtTime(0, time + duration + 0.005);
+}
+
+function playRhythm(time) {
+  const p = getPlaybackParams("middle");
+  if (!p) return;
+  if (random() > map(p.intensity, 0, 1, 0.18, 0.98)) return;
+
+  const trains = random() < p.modulation ? floor(random(2, 7)) : 1;
+  for (let i = 0; i < trains; i++) {
+    const offset = i * random(0.012, 0.038);
+    triggerGate(clickOsc, clickGain, random(machineFrequencies), random([0.004, 0.007, 0.011]), time + offset, map(p.intensity, 0, 1, 0.04, 0.34));
+  }
+  loops.middle.interval = random() < p.chaos ? "64n" : random(["32n", "16n"]);
+}
+
+function playSpace(time) {
+  const p = getPlaybackParams("ring");
+  if (!p) return;
+  staticFilter.frequency.rampTo(map(p.pitch + p.space, 0, 2, 12000, 1600), 0.08);
+  if (random() < map(p.intensity, 0, 1, 0.05, 0.55)) {
+    noiseBurst.triggerAttackRelease(random(["64n", "32n", "16n"]), time, map(p.intensity, 0, 1, 0.02, 0.18));
+  }
+  loops.ring.interval = random(["16n", "8n", "4n"]);
+}
+
+function playChaos(time) {
+  const p = getPlaybackParams("pinky");
+  if (!p) return;
+  if (random() > map(p.intensity + p.chaos, 0, 2, 0.06, 0.92)) return;
+
+  triggerGate(errorOsc, errorGain, random(machineFrequencies) * random(0.25, 2.5), random([0.006, 0.014, 0.028]), time, map(p.intensity + p.chaos, 0, 2, 0.04, 0.48));
+  if (random() < p.chaos) {
+    noiseBurst.triggerAttackRelease("128n", time + random(0, 0.04), map(p.chaos, 0, 1, 0.03, 0.22));
+  }
+  loops.pinky.interval = random(["64n", "32n", "16n"]);
+}
+
+function drawAbstractBackground() {
+  background(235, 22, 28);
+  noStroke();
+  for (let x = 0; x < width; x += 28) {
+    for (let y = 0; y < height; y += 28) {
+      fill((x + y + frameCount) % 84 === 0 ? color(20, 40, 180, 80) : color(255, 30, 150, 24));
+      rect(x, y, 10, 10);
+    }
+  }
+  stroke(120, 255, 0, 55);
+  strokeWeight(1);
+  for (let x = 0; x < width; x += 42) line(x, 0, x, height);
+  for (let y = 0; y < height; y += 42) line(0, y, width, y);
+  noStroke();
+  for (let i = 0; i < 90; i++) {
+    fill(i % 3 === 0 ? color(0, 35, 210, 110) : color(255, 245, 0, 90));
+    rect((i * 83 + frameCount * 0.8) % width, (i * 47 + sin(frameCount * 0.02 + i) * 40 + height) % height, 4, 4);
   }
 }
 
-function triggerChaos() {
-  if (!audioReady) return;
-
-  const frequency = random([110, 220, 440, 880, 1760, 3520]);
-  const duration = random(["64n", "32n"]);
-  glitchSynth.triggerAttackRelease(frequency, duration, undefined, random(0.1, 0.5));
-}
-
-function drawHands() {
-  const sorted = getSortedHands();
-
-  for (let i = 0; i < sorted.length; i++) {
-    const hand = sorted[i];
-    const isLeft = i === 0;
-    const pointColor = isLeft ? color(0, 210, 255) : color(255, 80, 180);
-    const lineColor = isLeft ? color(0, 210, 255, 150) : color(255, 80, 180, 150);
-
-    stroke(lineColor);
-    strokeWeight(3);
-    for (let j = 0; j < connections.length; j++) {
-      const a = hand.keypoints[connections[j][0]];
-      const b = hand.keypoints[connections[j][1]];
+function drawHands(sortedHands, activeFinger, leftHand) {
+  for (const hand of sortedHands) {
+    const isRight = hand === getHandBySide(sortedHands, "Right", 1);
+    const baseColor = isRight ? color(255, 42, 185) : color(120, 255, 0);
+    stroke(red(baseColor), green(baseColor), blue(baseColor), 125);
+    strokeWeight(2);
+    for (const pair of connections) {
+      const a = hand.keypoints[pair[0]];
+      const b = hand.keypoints[pair[1]];
       line(a.x, a.y, b.x, b.y);
     }
-
     noStroke();
-    fill(pointColor);
-    for (let j = 0; j < hand.keypoints.length; j++) {
-      circle(hand.keypoints[j].x, hand.keypoints[j].y, 10);
-    }
+    fill(baseColor);
+    for (const point of hand.keypoints) rect(point.x - 3, point.y - 3, 6, 6);
+  }
 
-    const wrist = hand.keypoints[0];
-    const label = isLeft ? "Left controls" : "Right performance";
-    textSize(13);
-    fill(pointColor);
-    rect(wrist.x - 8, wrist.y - 34, textWidth(label) + 18, 24, 4);
-    fill(0);
-    textAlign(LEFT, CENTER);
-    text(label, wrist.x, wrist.y - 22);
+  if (activeFinger) {
+    const c = layerColors[activeFinger.key];
+    noFill();
+    stroke(c[0], c[1], c[2]);
+    strokeWeight(4);
+    circle(activeFinger.point.x, activeFinger.point.y, 34 + sin(frameCount * 0.15) * 8);
+  }
+
+  if (isValidHand(leftHand)) {
+    const openness = getFingerOpenness(leftHand);
+    for (const key of layerOrder) {
+      if (openness[key] > 0.45) {
+        const p = leftHand.keypoints[fingerTips[key]];
+        fill(255, 255, 255, 180);
+        rect(p.x - 5, p.y - 5, 10, 10);
+      }
+    }
   }
 }
 
-function drawPanels() {
-  noStroke();
-  fill(0, 180);
-  rect(12, 12, 240, 100, 6);
-  fill(255);
-  textSize(14);
-  textAlign(LEFT, TOP);
-  text("Ikeda Hand Sampler", 24, 24);
-  text(audioReady ? "Audio ready" : "Click canvas to start audio", 24, 46);
-  text("World " + (worldIndex + 1) + ": " + worlds[worldIndex].name, 24, 68);
-  text("Hands detected: " + hands.length, 24, 90);
-
-  const x = width - 260;
-  const y = 12;
-  fill(0, 180);
-  rect(x, y, 248, 318, 6);
-  fill(255);
-  textSize(14);
-  text("Left hand", x + 14, y + 14);
-  drawRow("Thumb", melodyOn ? "melody on" : "melody off", leftState.thumb, melodyOn ? 1 : 0, x + 14, y + 40);
-  drawRow("Index", "pitch", leftState.index, leftState.pitch, x + 14, y + 62);
-  drawRow("Middle", "echo", leftState.middle, leftState.echo, x + 14, y + 84);
-  drawRow("Ring", "brightness", leftState.ring, leftState.brightness, x + 14, y + 106);
-  drawRow("Pinky", "sparkle", leftState.pinky, leftState.sparkle, x + 14, y + 128);
-
-  fill(255);
-  textSize(14);
-  text("Right hand", x + 14, y + 166);
-  textSize(12);
-  text("Thumb mode: " + rightState.modifier, x + 14, y + 187);
-  drawRow("Index", "lead", rightState.indexPinch, rightState.pitch, x + 14, y + 210);
-  drawRow("Middle", "glitch", rightState.middle, max(rightState.middleSpeed, rightState.middleCircle), x + 14, y + 232);
-  drawRow("Ring", "pad", rightState.ring, rightState.pad, x + 14, y + 254);
-  drawRow("Pinky", "chaos", rightState.pinky, rightState.chaos, x + 14, y + 276);
+function createLeftHandParticles(leftHand, openness) {
+  for (const key of layerOrder) {
+    if (key === "thumb") continue;
+    if (openness[key] > 0.45 && frameCount % 3 === 0) {
+      const p = leftHand.keypoints[fingerTips[key]];
+      particles.push({ x: p.x, y: p.y, vx: random(-1.4, 1.4), vy: random(-1.4, 1.4), life: 32, color: layerColors[activeLayerKey] || [255, 255, 255] });
+    }
+  }
 }
 
-function drawRow(name, label, active, level, x, y) {
-  fill(active ? color(0, 210, 255) : color(80));
-  circle(x + 6, y + 7, 9);
+function drawParticles() {
+  noStroke();
+  for (let i = particles.length - 1; i >= 0; i--) {
+    const p = particles[i];
+    fill(p.color[0], p.color[1], p.color[2], map(p.life, 0, 32, 0, 220));
+    rect(p.x, p.y, 5, 5);
+    p.x += p.vx;
+    p.y += p.vy;
+    p.life--;
+    if (p.life <= 0) particles.splice(i, 1);
+  }
+}
+
+function createSavedBlock(key, params) {
+  const c = layerColors[key];
+  const originX = 80 + savedBlocks.length * 124;
+  const originY = height - 110;
+  const cells = [];
+  for (let i = 0; i < 36; i++) cells.push({ x: (i % 6) * 13, y: floor(i / 6) * 13, on: random() < 0.35 + params.intensity * 0.45 });
+  savedBlocks.push({ key, x: originX % (width - 120), y: originY, color: c, cells });
+}
+
+function drawSavedBlocks() {
+  for (const block of savedBlocks) {
+    fill(block.color[0], block.color[1], block.color[2], 50);
+    rect(block.x - 8, block.y - 8, 94, 94);
+    for (const cell of block.cells) {
+      fill(block.color[0], block.color[1], block.color[2], cell.on ? 225 : 55);
+      rect(block.x + cell.x, block.y + cell.y, 9, 9);
+    }
+    fill(255);
+    textSize(10);
+    text(layerShortNames[block.key], block.x, block.y + 84);
+  }
+}
+
+function drawInterface(activeFinger) {
+  noStroke();
+  fill(0, 120);
+  rect(18, 18, 330, 160);
   fill(255);
-  textSize(12);
-  textAlign(LEFT, TOP);
-  text(name + " - " + label, x + 18, y);
-  fill(65);
-  rect(x + 146, y + 3, 72, 7, 3);
-  fill(active ? color(255, 80, 180) : color(130));
-  rect(x + 146, y + 3, 72 * constrain(level, 0, 1), 7, 3);
+  textSize(15);
+  text("ACTIVE LAYER", 34, 34);
+  textSize(22);
+  text(activeLayerKey ? layerNames[activeLayerKey] : "show one right finger", 34, 58);
+  textSize(13);
+  text(audioReady ? "Tone audio active" : "click/touch once to start Tone", 34, 92);
+  text(getLayerStatus(activeFinger), 34, 114);
+  text("left hand: thumb save | index intensity | middle speed", 34, 138);
+  text("ring space | pinky chaos", 34, 156);
+
+  const startX = width - 310;
+  const startY = 26;
+  fill(0, 125);
+  rect(startX - 18, startY - 8, 292, 186);
+  fill(255);
+  textSize(14);
+  text("SAVED LAYERS", startX, startY);
+  for (let i = 0; i < layerOrder.length; i++) {
+    const key = layerOrder[i];
+    const layer = layers[key];
+    const c = layerColors[key];
+    const y = startY + 28 + i * 28;
+    fill(c[0], c[1], c[2], layer.saved ? 230 : 60);
+    rect(startX, y, 18, 18);
+    fill(255);
+    textSize(12);
+    text(layerNames[key] + (layer.saved ? " / pattern loop" : " / empty"), startX + 28, y + 2);
+  }
+  if (activeLayerKey) drawParamBars(layers[activeLayerKey].params, 34, 205);
+}
+
+function drawParamBars(params, x, y) {
+  const labels = ["pitch", "intensity", "modulation", "space", "chaos"];
+  fill(0, 120);
+  rect(x - 16, y - 14, 250, 150);
+  for (let i = 0; i < labels.length; i++) {
+    const label = labels[i];
+    fill(255);
+    textSize(11);
+    text(label, x, y + i * 25);
+    fill(25, 20, 90);
+    rect(x + 86, y + i * 25 - 3, 120, 8);
+    const c = layerColors[activeLayerKey];
+    fill(c[0], c[1], c[2]);
+    rect(x + 86, y + i * 25 - 3, 120 * params[label], 8);
+  }
+}
+
+function getLayerStatus(activeFinger) {
+  if (!activeLayerKey) return "status: waiting";
+  const layer = layers[activeLayerKey];
+  const progress = layer.stillSince ? constrain((millis() - layer.stillSince) / stillSaveTime, 0, 1) : 0;
+  if (layer.saved) return "status: saved/frozen and looping";
+  if (!activeFinger) return "status: recording/modulating";
+  return "status: hold still to save " + nf(progress * 100, 2, 0) + "%";
+}
+
+function getActiveRightFinger(hand) {
+  if (!isValidHand(hand)) return null;
+  const openness = getFingerOpenness(hand);
+  let bestKey = null;
+  let bestAmount = 0.58;
+  for (const key of layerOrder) {
+    if (openness[key] > bestAmount) {
+      bestAmount = openness[key];
+      bestKey = key;
+    }
+  }
+  if (!bestKey) return null;
+  return { key: bestKey, point: hand.keypoints[fingerTips[bestKey]] };
+}
+
+function getFingerOpenness(hand) {
+  const openness = {};
+  for (const key of layerOrder) openness[key] = getFingerOpenAmount(hand, key);
+  return openness;
+}
+
+function getFingerOpenAmount(hand, key) {
+  if (!isValidHand(hand)) return 0;
+  const wrist = hand.keypoints[0];
+  const tip = hand.keypoints[fingerTips[key]];
+  const joint = hand.keypoints[fingerJoints[key]];
+  return constrain(map(dist(tip.x, tip.y, wrist.x, wrist.y) - dist(joint.x, joint.y, wrist.x, wrist.y), -10, 55, 0, 1), 0, 1);
 }
 
 function getSortedHands() {
-  return hands
-    .slice()
-    .filter(isValidHand)
-    .sort((a, b) => getHandCenterX(a) - getHandCenterX(b));
+  return hands.slice().filter(isValidHand).sort((a, b) => getHandCenterX(a) - getHandCenterX(b));
+}
+
+function getHandBySide(sortedHands, label, fallbackIndex) {
+  const hasLabels = sortedHands.some((hand) => hand.handedness);
+  for (const hand of sortedHands) if (hand.handedness === label) return hand;
+  if (hasLabels) return null;
+  return sortedHands[fallbackIndex] || null;
 }
 
 function isValidHand(hand) {
   if (!hand || !hand.keypoints || hand.keypoints.length < 21) return false;
-
   for (let i = 0; i < 21; i++) {
     const point = hand.keypoints[i];
-    if (!point || !Number.isFinite(point.x) || !Number.isFinite(point.y)) {
-      return false;
-    }
+    if (!point || !Number.isFinite(point.x) || !Number.isFinite(point.y)) return false;
   }
-
   return true;
 }
 
-function getHandBySide(sortedHands, label, fallbackIndex) {
-  const hasHandednessLabels = sortedHands.some((hand) => hand.handedness);
-
-  for (let i = 0; i < sortedHands.length; i++) {
-    if (sortedHands[i].handedness === label) {
-      return sortedHands[i];
-    }
-  }
-
-  if (hasHandednessLabels) {
-    return null;
-  }
-
-  return sortedHands[fallbackIndex] || null;
-}
-
 function getHandCenterX(hand) {
-  if (!isValidHand(hand)) return width / 2;
-
   let total = 0;
-
-  for (let i = 0; i < hand.keypoints.length; i++) {
-    total += hand.keypoints[i].x;
-  }
-
+  for (const point of hand.keypoints) total += point.x;
   return total / hand.keypoints.length;
 }
 
-function getFingers(hand) {
+function getPalmCenter(hand) {
   return {
-    thumb: isFingerUp(hand, 4, 2),
-    index: isFingerUp(hand, 8, 6),
-    middle: isFingerUp(hand, 12, 10),
-    ring: isFingerUp(hand, 16, 14),
-    pinky: isFingerUp(hand, 20, 18),
+    x: (hand.keypoints[0].x + hand.keypoints[5].x + hand.keypoints[17].x) / 3,
+    y: (hand.keypoints[0].y + hand.keypoints[5].y + hand.keypoints[17].y) / 3,
   };
 }
 
-function isFingerUp(hand, tipIndex, jointIndex) {
-  const tip = hand.keypoints[tipIndex];
-  const joint = hand.keypoints[jointIndex];
-
-  return tip.y < joint.y - 12;
+function getScaleFrequency(position, rootMidi, span) {
+  const index = floor(constrain(position, 0, 0.999) * pentatonic.length);
+  const octave = floor(constrain(position, 0, 0.999) * span) * 12;
+  return Tone.Frequency(rootMidi + pentatonic[index] + octave, "midi").toFrequency();
 }
 
-function getFingerLevel(hand, tipIndex) {
-  const tip = hand.keypoints[tipIndex];
-  const wrist = hand.keypoints[0];
-
-  return constrain(map(tip.y, wrist.y + 40, wrist.y - 190, 0, 1), 0, 1);
+function getTotalSavedIntensity() {
+  let total = 0;
+  for (const key of layerOrder) if (layers[key].saved && layers[key].savedParams) total += layers[key].savedParams.intensity;
+  return total;
 }
 
-function isPinching(hand, tipIndex) {
-  const thumb = hand.keypoints[4];
-  const tip = hand.keypoints[tipIndex];
-
-  return dist(thumb.x, thumb.y, tip.x, tip.y) < pinchDistance;
+function lerpPoint(a, b, amount) {
+  return { x: lerp(a.x, b.x, amount), y: lerp(a.y, b.y, amount) };
 }
 
-function getModifier(hand) {
-  if (isPinching(hand, 12)) return "distorted";
-  if (isPinching(hand, 16)) return "octave";
-  if (isPinching(hand, 20)) return "granular";
-  if (isPinching(hand, 8)) return "normal";
-
-  return "none";
-}
-
-function getCircleGesture(point, center) {
-  const angle = atan2(point.y - center.y, point.x - center.x);
-
-  if (previousMiddleAngle === null) {
-    previousMiddleAngle = angle;
-    return 0;
+function resetStillTracking() {
+  for (const key of layerOrder) {
+    layers[key].stillSince = null;
+    layers[key].lastTip = null;
   }
-
-  let delta = angle - previousMiddleAngle;
-  if (delta > PI) delta -= TWO_PI;
-  if (delta < -PI) delta += TWO_PI;
-
-  previousMiddleAngle = angle;
-  circleAmount = constrain(circleAmount * 0.92 + abs(delta) * 0.65, 0, 1);
-
-  return circleAmount;
 }
