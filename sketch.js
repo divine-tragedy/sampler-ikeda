@@ -7,25 +7,15 @@ let previousActiveLayerKey = null;
 let leftThumbWasOpen = false;
 
 let master;
-let masterFilter;
 let reverb;
 let delay;
 let crusher;
 let distortion;
-let droneSubOsc;
-let droneSubGain;
-let highSignalOsc;
-let highSignalGain;
-let clickOsc;
-let clickGain;
-let noiseBurst;
-let noiseFilter;
-let staticFilter;
-let staticGain;
-let errorOsc;
-let errorGain;
-let noise;
-let noiseGain;
+let ambientEngine;
+let blipEngine;
+let rhythmEngine;
+let atmosphereEngine;
+let chaosEngine;
 let loops = {};
 
 const canvasW = 960;
@@ -43,19 +33,19 @@ const fingerTips = { thumb: 4, index: 8, middle: 12, ring: 16, pinky: 20 };
 const fingerJoints = { thumb: 2, index: 6, middle: 10, ring: 14, pinky: 18 };
 
 const layerNames = {
-  thumb: "Drone / Foundation",
-  index: "Melody / Voice",
-  middle: "Rhythm / Pulse",
-  ring: "Space / Atmosphere",
-  pinky: "Chaos / Transformation",
+  thumb: "Right Thumb / Tonal Field",
+  index: "Right Index / Signals",
+  middle: "Right Middle / Rhythmic Structures",
+  ring: "Right Ring / Texture Clouds",
+  pinky: "Right Pinky / Mutation",
 };
 
 const layerShortNames = {
-  thumb: "DRONE",
-  index: "MELODY",
-  middle: "RHYTHM",
-  ring: "SPACE",
-  pinky: "CHAOS",
+  thumb: "TONAL",
+  index: "SIGNAL",
+  middle: "TIME",
+  ring: "CLOUD",
+  pinky: "MUTATE",
 };
 
 const layerColors = {
@@ -78,6 +68,13 @@ const connections = [
 let layers = {};
 let particles = [];
 let savedBlocks = [];
+let visualState = {
+  colorMix: 0,
+  pixelNoise: 0.15,
+  scatter: 0.1,
+  brokenGrid: 0.08,
+  flicker: 0.05,
+};
 
 function preload() {
   handPose = ml5.handPose({
@@ -138,44 +135,77 @@ function setupLayers() {
 
 function setupTone() {
   master = new Tone.Gain(0.62).toDestination();
-  masterFilter = new Tone.Filter(9000, "highpass").connect(master);
-  reverb = new Tone.Reverb({ decay: 1.6, wet: 0.08 }).connect(master);
+  reverb = new Tone.Reverb({ decay: 3.2, wet: 0.12 }).connect(master);
   delay = new Tone.FeedbackDelay("32n", 0.18).connect(reverb);
   distortion = new Tone.Distortion(0.18).connect(delay);
   crusher = new Tone.BitCrusher(6).connect(distortion);
 
-  droneSubGain = new Tone.Gain(0).connect(master);
-  droneSubOsc = new Tone.Oscillator({ type: "square", frequency: 43 }).connect(droneSubGain);
+  ambientEngine = createAmbientEngine();
+  blipEngine = createBlipEngine();
+  rhythmEngine = createRhythmEngine();
+  atmosphereEngine = createAtmosphereEngine();
+  chaosEngine = createChaosEngine();
 
-  highSignalGain = new Tone.Gain(0).connect(delay);
-  highSignalOsc = new Tone.Oscillator({ type: "square", frequency: 4093 }).connect(highSignalGain);
-
-  clickGain = new Tone.Gain(0).connect(master);
-  clickOsc = new Tone.Oscillator({ type: "square", frequency: 1200 }).connect(clickGain);
-
-  noiseBurst = new Tone.NoiseSynth({
-    noise: { type: "white" },
-    envelope: { attack: 0.001, decay: 0.035, sustain: 0, release: 0.02 },
-  });
-  noiseFilter = new Tone.Filter(8000, "highpass").connect(delay);
-  noiseBurst.connect(noiseFilter);
-
-  errorGain = new Tone.Gain(0).connect(crusher);
-  errorOsc = new Tone.Oscillator({ type: "sawtooth", frequency: 2300 }).connect(errorGain);
-
-  noise = new Tone.Noise("white");
-  staticFilter = new Tone.Filter(8000, "highpass");
-  staticGain = new Tone.Gain(0).connect(delay);
-  noiseGain = new Tone.Gain(0).connect(crusher);
-  noise.connect(staticFilter);
-  staticFilter.connect(staticGain);
-  staticFilter.connect(noiseGain);
-
-  loops.thumb = new Tone.Loop((time) => playDrone(time), "8n");
-  loops.index = new Tone.Loop((time) => playMelody(time), "16n");
+  loops.thumb = new Tone.Loop((time) => playAmbient(time), "8n");
+  loops.index = new Tone.Loop((time) => playBlips(time), "16n");
   loops.middle = new Tone.Loop((time) => playRhythm(time), "32n");
-  loops.ring = new Tone.Loop((time) => playSpace(time), "16n");
+  loops.ring = new Tone.Loop((time) => playAtmosphere(time), "16n");
   loops.pinky = new Tone.Loop((time) => playChaos(time), "32n");
+}
+
+function createAmbientEngine() {
+  const chordFilter = new Tone.Filter(950, "lowpass").connect(reverb);
+  const chordGain = new Tone.Gain(0).connect(chordFilter);
+  const chordOscs = [
+    new Tone.Oscillator({ type: "triangle", frequency: 110 }).connect(chordGain),
+    new Tone.Oscillator({ type: "triangle", frequency: 137.5 }).connect(chordGain),
+    new Tone.Oscillator({ type: "sine", frequency: 165 }).connect(chordGain),
+  ];
+  const pulseFilter = new Tone.Filter(95, "lowpass").connect(reverb);
+  const pulseGain = new Tone.Gain(0).connect(pulseFilter);
+  const pulse = new Tone.Oscillator({ type: "triangle", frequency: 37 }).connect(pulseGain);
+  const dustGain = new Tone.Gain(0).connect(reverb);
+  const dustFilter = new Tone.Filter(1900, "bandpass").connect(dustGain);
+  const dust = new Tone.Noise("pink").connect(dustFilter);
+  return { chordOscs, chordGain, chordFilter, pulse, pulseGain, pulseFilter, dust, dustGain, dustFilter };
+}
+
+function createBlipEngine() {
+  const gain = new Tone.Gain(0).connect(crusher);
+  const clickGain = new Tone.Gain(0).connect(master);
+  const blip = new Tone.Oscillator({ type: "square", frequency: 4093 }).connect(gain);
+  const click = new Tone.Oscillator({ type: "square", frequency: 6200 }).connect(clickGain);
+  return { blip, click, gain, clickGain };
+}
+
+function createRhythmEngine() {
+  const clickGain = new Tone.Gain(0).connect(master);
+  const pulseGain = new Tone.Gain(0).connect(delay);
+  const click = new Tone.Oscillator({ type: "square", frequency: 1800 }).connect(clickGain);
+  const pulse = new Tone.Oscillator({ type: "triangle", frequency: 55 }).connect(pulseGain);
+  return { click, pulse, clickGain, pulseGain };
+}
+
+function createAtmosphereEngine() {
+  const panner = new Tone.Panner(0).connect(reverb);
+  const gain = new Tone.Gain(0).connect(panner);
+  const filter = new Tone.Filter(7200, "highpass").connect(gain);
+  const noise = new Tone.Noise("white").connect(filter);
+  const burst = new Tone.NoiseSynth({
+    noise: { type: "white" },
+    envelope: { attack: 0.001, decay: 0.045, sustain: 0, release: 0.02 },
+  }).connect(delay);
+  return { noise, filter, gain, panner, burst };
+}
+
+function createChaosEngine() {
+  const gain = new Tone.Gain(0).connect(crusher);
+  const error = new Tone.Oscillator({ type: "sawtooth", frequency: 2300 }).connect(gain);
+  const burst = new Tone.NoiseSynth({
+    noise: { type: "white" },
+    envelope: { attack: 0.001, decay: 0.025, sustain: 0, release: 0.006 },
+  }).connect(crusher);
+  return { error, gain, burst };
 }
 
 function draw() {
@@ -195,6 +225,7 @@ function draw() {
   recordActiveLayerParams();
   updateFreezeLogic(activeFinger, leftHand);
   updateToneParameters();
+  updateVisualState();
 
   drawSavedBlocks();
   drawParticles();
@@ -206,11 +237,15 @@ async function startAudio() {
   if (audioReady) return;
   await Tone.start();
   await Tone.loaded();
-  droneSubOsc.start();
-  highSignalOsc.start();
-  clickOsc.start();
-  errorOsc.start();
-  noise.start();
+  for (const osc of ambientEngine.chordOscs) osc.start();
+  ambientEngine.pulse.start();
+  ambientEngine.dust.start();
+  blipEngine.blip.start();
+  blipEngine.click.start();
+  rhythmEngine.click.start();
+  rhythmEngine.pulse.start();
+  atmosphereEngine.noise.start();
+  chaosEngine.error.start();
   Tone.Transport.bpm.value = 96;
   Tone.Transport.start();
   for (const key of layerOrder) loops[key].start(0);
@@ -332,23 +367,83 @@ function saveLayer(key) {
 function updateToneParameters() {
   if (!audioReady) return;
 
-  const space = getPlaybackParams("ring");
+  const ambient = getPlaybackParams("thumb");
+  const blips = getPlaybackParams("index");
+  const rhythm = getPlaybackParams("middle");
+  const atmosphere = getPlaybackParams("ring");
   const chaos = getPlaybackParams("pinky");
-  const drone = getPlaybackParams("thumb");
 
-  const wet = space ? map(space.space + space.intensity, 0, 2, 0.02, 0.42) : 0.05;
-  const feedback = space ? map(space.modulation, 0, 1, 0.04, 0.45) : 0.14;
+  const wet = Math.max(
+    ambient ? map(ambient.space, 0, 1, 0.08, 0.55) : 0.04,
+    atmosphere ? map(atmosphere.space + atmosphere.intensity, 0, 2, 0.1, 0.82) : 0.04
+  );
+  const feedback = Math.max(
+    blips ? map(blips.space, 0, 1, 0.06, 0.42) : 0.08,
+    rhythm ? map(rhythm.space, 0, 1, 0.04, 0.32) : 0.08,
+    chaos ? map(chaos.space, 0, 1, 0.08, 0.62) : 0.08
+  );
   const crush = chaos ? floor(map(chaos.chaos, 0, 1, 8, 2)) : 8;
   const damage = chaos ? map(chaos.intensity + chaos.chaos, 0, 2, 0.02, 0.75) : 0.12;
-  const cutoff = drone ? map(drone.intensity + drone.pitch, 0, 2, 11000, 1800) : 9000;
 
   reverb.wet.rampTo(wet, 0.12);
   delay.feedback.rampTo(feedback, 0.12);
   crusher.bits = crush;
   distortion.distortion = damage;
-  masterFilter.frequency.rampTo(cutoff, 0.12);
-  staticGain.gain.rampTo(space ? map(space.intensity + space.space, 0, 2, 0.002, 0.055) : 0, 0.12);
-  noiseGain.gain.rampTo(chaos ? map(chaos.chaos, 0, 1, 0.003, 0.14) : 0, 0.08);
+
+  updateAmbientEngine(ambient);
+  updateAtmosphereEngine(atmosphere);
+  chaosEngine.gain.gain.rampTo(chaos ? map(chaos.intensity + chaos.chaos, 0, 2, 0.001, 0.18) : 0, 0.08);
+}
+
+function updateAmbientEngine(p) {
+  if (!p) {
+    ambientEngine.chordGain.gain.rampTo(0, 0.45);
+    ambientEngine.pulseGain.gain.rampTo(0, 0.08);
+    ambientEngine.dustGain.gain.rampTo(0, 0.2);
+    return;
+  }
+
+  const root = 38 + floor(constrain(p.pitch, 0, 0.999) * 18);
+  const chordIntervals = p.chaos > 0.55 ? [0, 3, 10] : [0, 7, 15];
+  const spread = map(p.chaos, 0, 1, 0.08, 5.5);
+  for (let i = 0; i < ambientEngine.chordOscs.length; i++) {
+    const drift = sin(frameCount * map(p.modulation, 0, 1, 0.004, 0.035) + i * 1.7) * spread;
+    const freq = Tone.Frequency(root + chordIntervals[i], "midi").toFrequency() + drift;
+    ambientEngine.chordOscs[i].frequency.rampTo(freq, 0.35);
+  }
+  ambientEngine.chordGain.gain.rampTo(map(p.intensity, 0, 1, 0.0, 0.105), 0.5);
+  ambientEngine.chordFilter.frequency.rampTo(map(p.intensity + p.space, 0, 2, 260, 2400), 0.45);
+  ambientEngine.pulseGain.gain.rampTo(0, 0.08);
+  ambientEngine.dustGain.gain.rampTo(map(p.chaos, 0, 1, 0.001, 0.03), 0.2);
+  ambientEngine.dustFilter.frequency.rampTo(map(p.modulation + p.space, 0, 2, 600, 4800), 0.22);
+  ambientEngine.pulseFilter.frequency.rampTo(map(p.pitch + p.intensity, 0, 2, 55, 180), 0.18);
+}
+
+function updateAtmosphereEngine(p) {
+  if (!p) {
+    atmosphereEngine.gain.gain.rampTo(0, 0.2);
+    return;
+  }
+
+  atmosphereEngine.gain.gain.rampTo(map(p.intensity, 0, 1, 0.002, 0.075), 0.15);
+  atmosphereEngine.filter.frequency.rampTo(map(p.pitch + p.space, 0, 2, 10500, 1500), 0.15);
+  atmosphereEngine.panner.pan.rampTo(sin(frameCount * map(p.modulation, 0, 1, 0.005, 0.07)) * map(p.space, 0, 1, 0.1, 0.95), 0.08);
+}
+
+function updateVisualState() {
+  const thumb = getPlaybackParams("thumb");
+  const index = getPlaybackParams("index");
+  const colorTarget = thumb ? constrain(thumb.pitch + thumb.modulation * 0.45, 0, 1) : 0;
+  const pixelTarget = index ? constrain(index.intensity * 0.75 + index.chaos * 0.35, 0, 1) : 0.12;
+  const scatterTarget = index ? constrain(index.chaos * 0.8 + index.modulation * 0.25, 0, 1) : 0.08;
+  const gridTarget = index ? constrain(index.space * 0.5 + index.chaos * 0.6, 0, 1) : 0.06;
+  const flickerTarget = index ? constrain(index.modulation * 0.45 + index.chaos * 0.55, 0, 1) : 0.04;
+
+  visualState.colorMix = lerp(visualState.colorMix, colorTarget, 0.08);
+  visualState.pixelNoise = lerp(visualState.pixelNoise, pixelTarget, 0.08);
+  visualState.scatter = lerp(visualState.scatter, scatterTarget, 0.08);
+  visualState.brokenGrid = lerp(visualState.brokenGrid, gridTarget, 0.08);
+  visualState.flicker = lerp(visualState.flicker, flickerTarget, 0.08);
 }
 
 function getPlaybackParams(key) {
@@ -373,35 +468,36 @@ function getPatternParams(layer) {
   return current.params;
 }
 
-function playDrone(time) {
+function playAmbient(time) {
   const p = getPlaybackParams("thumb");
   if (!p) return;
-  if (random() > map(p.intensity, 0, 1, 0.18, 0.82)) return;
 
-  const sub = random(subFrequencies);
-  const high = random(machineFrequencies);
-  const subVelocity = map(p.intensity, 0, 1, 0.06, 0.32);
-  const highVelocity = map(p.chaos + p.modulation, 0, 2, 0.015, 0.14);
-
-  triggerGate(droneSubOsc, droneSubGain, sub, random([0.025, 0.05, 0.09]), time, subVelocity);
-  if (random() < 0.2 + p.modulation * 0.45) {
-    triggerGate(highSignalOsc, highSignalGain, high, 0.018, time + random(0, 0.03), highVelocity);
+  if (random() < map(p.intensity, 0, 1, 0.08, 0.38)) {
+    triggerGate(ambientEngine.pulse, ambientEngine.pulseGain, random(subFrequencies), random([0.018, 0.035, 0.065]), time, map(p.intensity, 0, 1, 0.015, 0.12));
   }
-  loops.thumb.interval = random() < p.chaos ? "16n" : random(["8n", "4n"]);
+  if (random() < 0.05 + p.chaos * 0.32) {
+    const high = random(machineFrequencies) * random([0.5, 1, 2]);
+    triggerGate(blipEngine.click, blipEngine.clickGain, high, random([0.002, 0.004, 0.007]), time + random(0, 0.08), map(p.chaos, 0, 1, 0.006, 0.05));
+  }
+  loops.thumb.interval = random() < p.modulation ? "8n" : "4n";
 }
 
-function playMelody(time) {
+function playBlips(time) {
   const p = getPlaybackParams("index");
   if (!p) return;
-  if (random() > map(p.intensity, 0, 1, 0.08, 0.9)) return;
+  if (random() > map(p.intensity, 0, 1, 0.05, 0.94)) return;
 
-  const note = random(machineFrequencies);
-  const velocity = map(p.intensity, 0, 1, 0.05, 0.34);
-  triggerGate(highSignalOsc, highSignalGain, note, random([0.012, 0.02, 0.035]), time, velocity);
-  if (random() < p.modulation * 0.5) {
-    triggerGate(highSignalOsc, highSignalGain, random(machineFrequencies), 0.012, time + 0.025, velocity * 0.7);
+  const repeats = random() < p.modulation ? floor(random(2, 6)) : 1;
+  const velocity = map(p.intensity, 0, 1, 0.025, 0.25);
+  for (let i = 0; i < repeats; i++) {
+    const offset = i * random(0.009, 0.032);
+    const pitchJump = random() < p.chaos ? random([0.5, 1, 1.5, 2, 3]) : 1;
+    triggerGate(blipEngine.blip, blipEngine.gain, random(machineFrequencies) * pitchJump, random([0.002, 0.004, 0.007, 0.011]), time + offset, velocity);
+    if (random() < 0.2 + p.intensity * 0.25) {
+      triggerGate(blipEngine.click, blipEngine.clickGain, random(machineFrequencies), 0.002, time + offset + 0.002, velocity * 0.6);
+    }
   }
-  loops.index.interval = random() < p.chaos ? "64n" : random(["32n", "16n", "8n"]);
+  loops.index.interval = random() < p.chaos ? "64n" : random(["32n", "16n"]);
 }
 
 function triggerGate(oscillator, gainNode, frequency, duration, time, velocity) {
@@ -418,22 +514,25 @@ function playRhythm(time) {
   if (!p) return;
   if (random() > map(p.intensity, 0, 1, 0.18, 0.98)) return;
 
-  const trains = random() < p.modulation ? floor(random(2, 7)) : 1;
+  const trains = random() < p.modulation ? floor(random(2, 9)) : 1;
   for (let i = 0; i < trains; i++) {
-    const offset = i * random(0.012, 0.038);
-    triggerGate(clickOsc, clickGain, random(machineFrequencies), random([0.004, 0.007, 0.011]), time + offset, map(p.intensity, 0, 1, 0.04, 0.34));
+    if (random() < p.chaos * 0.35) continue;
+    const offset = i * random(0.008, 0.032);
+    triggerGate(rhythmEngine.click, rhythmEngine.clickGain, random(machineFrequencies), random([0.003, 0.005, 0.009]), time + offset, map(p.intensity, 0, 1, 0.035, 0.28));
+    if (i === 0 || random() < 0.25) {
+      triggerGate(rhythmEngine.pulse, rhythmEngine.pulseGain, random(subFrequencies), random([0.018, 0.032, 0.055]), time + offset, map(p.intensity, 0, 1, 0.025, 0.18));
+    }
   }
   loops.middle.interval = random() < p.chaos ? "64n" : random(["32n", "16n"]);
 }
 
-function playSpace(time) {
+function playAtmosphere(time) {
   const p = getPlaybackParams("ring");
   if (!p) return;
-  staticFilter.frequency.rampTo(map(p.pitch + p.space, 0, 2, 12000, 1600), 0.08);
-  if (random() < map(p.intensity, 0, 1, 0.05, 0.55)) {
-    noiseBurst.triggerAttackRelease(random(["64n", "32n", "16n"]), time, map(p.intensity, 0, 1, 0.02, 0.18));
+  if (random() < map(p.intensity + p.chaos, 0, 2, 0.04, 0.7)) {
+    atmosphereEngine.burst.triggerAttackRelease(random(["128n", "64n", "32n", "16n"]), time + random(0, 0.035), map(p.intensity, 0, 1, 0.01, 0.16));
   }
-  loops.ring.interval = random(["16n", "8n", "4n"]);
+  loops.ring.interval = random() < p.modulation ? random(["32n", "16n"]) : random(["8n", "4n"]);
 }
 
 function playChaos(time) {
@@ -441,31 +540,73 @@ function playChaos(time) {
   if (!p) return;
   if (random() > map(p.intensity + p.chaos, 0, 2, 0.06, 0.92)) return;
 
-  triggerGate(errorOsc, errorGain, random(machineFrequencies) * random(0.25, 2.5), random([0.006, 0.014, 0.028]), time, map(p.intensity + p.chaos, 0, 2, 0.04, 0.48));
+  triggerGate(chaosEngine.error, chaosEngine.gain, random(machineFrequencies) * random(0.2, 3.5), random([0.004, 0.009, 0.018, 0.032]), time, map(p.intensity + p.chaos, 0, 2, 0.025, 0.42));
   if (random() < p.chaos) {
-    noiseBurst.triggerAttackRelease("128n", time + random(0, 0.04), map(p.chaos, 0, 1, 0.03, 0.22));
+    chaosEngine.burst.triggerAttackRelease(random(["256n", "128n", "64n"]), time + random(0, 0.04), map(p.chaos, 0, 1, 0.02, 0.2));
   }
   loops.pinky.interval = random(["64n", "32n", "16n"]);
 }
 
 function drawAbstractBackground() {
-  background(235, 22, 28);
+  const mainColor = getMainVisualColor();
+  const flicker = random() < visualState.flicker * 0.25 ? random(-45, 45) : 0;
+
+  background(
+    constrain(red(mainColor) + flicker, 0, 255),
+    constrain(green(mainColor) + flicker * 0.35, 0, 255),
+    constrain(blue(mainColor) + flicker, 0, 255)
+  );
   noStroke();
-  for (let x = 0; x < width; x += 28) {
-    for (let y = 0; y < height; y += 28) {
-      fill((x + y + frameCount) % 84 === 0 ? color(20, 40, 180, 80) : color(255, 30, 150, 24));
-      rect(x, y, 10, 10);
+
+  const step = floor(map(visualState.pixelNoise, 0, 1, 34, 12));
+  for (let x = 0; x < width; x += step) {
+    for (let y = 0; y < height; y += step) {
+      const broken = random() < visualState.brokenGrid * 0.18;
+      const offsetX = broken ? random(-10, 10) : 0;
+      const offsetY = broken ? random(-10, 10) : 0;
+      fill((x + y + frameCount) % (step * 3) === 0 ? color(20, 40, 180, 80) : color(255, 30, 150, 24 + visualState.pixelNoise * 60));
+      rect(x + offsetX, y + offsetY, max(3, step * 0.34), max(3, step * 0.34));
     }
   }
-  stroke(120, 255, 0, 55);
+
+  stroke(120, 255, 0, 55 + visualState.brokenGrid * 100);
   strokeWeight(1);
-  for (let x = 0; x < width; x += 42) line(x, 0, x, height);
-  for (let y = 0; y < height; y += 42) line(0, y, width, y);
-  noStroke();
-  for (let i = 0; i < 90; i++) {
-    fill(i % 3 === 0 ? color(0, 35, 210, 110) : color(255, 245, 0, 90));
-    rect((i * 83 + frameCount * 0.8) % width, (i * 47 + sin(frameCount * 0.02 + i) * 40 + height) % height, 4, 4);
+  for (let x = 0; x < width; x += 42) {
+    const shift = random() < visualState.brokenGrid * 0.45 ? random(-18, 18) : 0;
+    line(x + shift, 0, x - shift, height);
   }
+  for (let y = 0; y < height; y += 42) {
+    const shift = random() < visualState.brokenGrid * 0.45 ? random(-18, 18) : 0;
+    line(0, y + shift, width, y - shift);
+  }
+
+  noStroke();
+  const scatterCount = floor(map(visualState.scatter + visualState.pixelNoise, 0, 2, 70, 360));
+  for (let i = 0; i < scatterCount; i++) {
+    const size = random([2, 3, 4, 6, 9]);
+    const x = random(width);
+    const y = random(height);
+    fill(i % 3 === 0 ? color(0, 35, 210, 80 + visualState.scatter * 140) : color(255, 245, 0, 70 + visualState.pixelNoise * 120));
+    rect(x, y, size, size);
+  }
+
+  if (random() < visualState.flicker * 0.55) {
+    fill(255, 255, 255, 60 + visualState.flicker * 100);
+    rect(0, random(height), width, random(2, 12));
+  }
+}
+
+function getMainVisualColor() {
+  const palette = [
+    color(235, 22, 28),
+    color(255, 42, 185),
+    color(120, 255, 0),
+    color(20, 40, 210),
+  ];
+  const scaled = visualState.colorMix * (palette.length - 1);
+  const index = floor(scaled);
+  const nextIndex = min(index + 1, palette.length - 1);
+  return lerpColor(palette[index], palette[nextIndex], scaled - index);
 }
 
 function drawHands(sortedHands, activeFinger, leftHand) {
@@ -553,17 +694,18 @@ function drawSavedBlocks() {
 function drawInterface(activeFinger) {
   noStroke();
   fill(0, 120);
-  rect(18, 18, 330, 160);
+  rect(18, 18, 430, 178);
   fill(255);
   textSize(15);
   text("ACTIVE LAYER", 34, 34);
-  textSize(22);
+  textSize(18);
   text(activeLayerKey ? layerNames[activeLayerKey] : "show one right finger", 34, 58);
   textSize(13);
   text(audioReady ? "Tone audio active" : "click/touch once to start Tone", 34, 92);
   text(getLayerStatus(activeFinger), 34, 114);
-  text("left hand: thumb save | index intensity | middle speed", 34, 138);
-  text("ring space | pinky chaos", 34, 156);
+  text("left hand: thumb freeze | index intensity | middle movement", 34, 138);
+  text("ring space | pinky complexity", 34, 156);
+  text("right hand: thumb tonal | index signals | middle time", 34, 174);
 
   const startX = width - 310;
   const startY = 26;
@@ -581,17 +723,19 @@ function drawInterface(activeFinger) {
     rect(startX, y, 18, 18);
     fill(255);
     textSize(12);
-    text(layerNames[key] + (layer.saved ? " / pattern loop" : " / empty"), startX + 28, y + 2);
+    text(layerShortNames[key] + (layer.saved ? " / pattern loop" : " / empty"), startX + 28, y + 2);
   }
   if (activeLayerKey) drawParamBars(layers[activeLayerKey].params, 34, 205);
 }
 
 function drawParamBars(params, x, y) {
-  const labels = ["pitch", "intensity", "modulation", "space", "chaos"];
+  const labels = ["tone", "intensity", "movement", "space", "complexity"];
+  const paramsKeys = ["pitch", "intensity", "modulation", "space", "chaos"];
   fill(0, 120);
   rect(x - 16, y - 14, 250, 150);
   for (let i = 0; i < labels.length; i++) {
     const label = labels[i];
+    const paramKey = paramsKeys[i];
     fill(255);
     textSize(11);
     text(label, x, y + i * 25);
@@ -599,7 +743,7 @@ function drawParamBars(params, x, y) {
     rect(x + 86, y + i * 25 - 3, 120, 8);
     const c = layerColors[activeLayerKey];
     fill(c[0], c[1], c[2]);
-    rect(x + 86, y + i * 25 - 3, 120 * params[label], 8);
+    rect(x + 86, y + i * 25 - 3, 120 * params[paramKey], 8);
   }
 }
 
@@ -616,7 +760,7 @@ function getActiveRightFinger(hand) {
   if (!isValidHand(hand)) return null;
   const openness = getFingerOpenness(hand);
   let bestKey = null;
-  let bestAmount = 0.58;
+  let bestAmount = 0.56;
   for (const key of layerOrder) {
     if (openness[key] > bestAmount) {
       bestAmount = openness[key];
