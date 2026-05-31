@@ -30,19 +30,19 @@ const loopLifetimeCycles = 5;
 const processOrder = ["loopCreator", "motion", "texture", "space", "decay"];
 
 const processNames = {
-  loopCreator: "1 Finger / Ambient Pad",
-  motion: "2 Fingers / Pluck / Bell",
-  texture: "3 Fingers / Rhythm Click",
-  space: "4 Fingers / Noise Texture",
-  decay: "5 Fingers / Glitch Sound",
+  loopCreator: "1 Finger / Drone Chord",
+  motion: "2 Fingers / Percussive Loop",
+  texture: "3 Fingers / Click Pattern",
+  space: "4 Fingers / Lead",
+  decay: "5 Fingers / Sample Grid",
 };
 
 const processShortNames = {
-  loopCreator: "PAD",
-  motion: "BELL",
-  texture: "CLICK",
-  space: "NOISE",
-  decay: "GLITCH",
+  loopCreator: "DRONE",
+  motion: "PERC",
+  texture: "CLICKS",
+  space: "LEAD",
+  decay: "SAMPLE",
 };
 
 const processColors = {
@@ -73,8 +73,24 @@ const scaleBanks = [
   ["A1", "C2", "E2", "A2", "C3", "D3", "E3", "G3", "A3", "C4", "E4"],
 ];
 const fixedScale = ["C2", "Eb2", "F2", "G2", "Bb2", "C3", "Eb3", "F3", "G3", "Bb3", "C4"];
+const chordBank = [
+  ["C2", "G2", "Eb3"],
+  ["Eb2", "Bb2", "G3"],
+  ["F2", "C3", "G3"],
+  ["G2", "D3", "Bb3"],
+  ["Bb2", "F3", "C4"],
+];
+const rhythmSubdivisions = [1, 2, 4, 8, 16];
+const samplePaths = [
+  "sounds/loop1.wav",
+  "sounds/loop2.wav",
+  "sounds/loop3.wav",
+  "sounds/loop4.wav",
+  "sounds/loop5.wav",
+];
 let selectedNote = "C3";
 let selectedFilter = 0.5;
+let selectedSampleIndex = 0;
 
 const defaultParams = {
   density: 0.18,
@@ -323,31 +339,41 @@ function updateLeftIndexNote(leftHand) {
   const noteIndex = floor(constrain(map(indexTip.y, height * 0.92, height * 0.08, 0, fixedScale.length), 0, fixedScale.length - 0.001));
   selectedNote = fixedScale[noteIndex];
   selectedFilter = constrain(map(indexTip.x, width * 0.08, width * 0.92, 0, 1), 0, 1);
+  selectedSampleIndex = getSampleGridIndex(indexTip);
+}
+
+function getSampleGridIndex(point) {
+  if (!isFinitePoint(point)) return 0;
+  const col = floor(constrain(map(point.x, 0, width, 0, 4), 0, 3.999));
+  const row = floor(constrain(map(point.y, 0, height, 0, 4), 0, 3.999));
+  return row * 4 + col;
 }
 
 function handlePinchTrigger(leftHand) {
   const pinchActive = GestureDetector.isThumbIndexPinch(leftHand);
-  if (pinchActive && !leftPinchWasActive) triggerSelectedNote();
+  if (pinchActive && !leftPinchWasActive) triggerSelectedNote(leftHand);
   leftPinchWasActive = pinchActive;
 }
 
-function triggerSelectedNote() {
+function triggerSelectedNote(leftHand) {
   if (!activeProcessKey) return;
   if (!audioReady && !audioStarting) startAudioFromHands();
-  const isBackgroundLoop = activeProcessKey === "loopCreator";
+  const isBackgroundLoop = activeProcessKey === "loopCreator" || activeProcessKey === "motion";
+  const event = createGestureEvent(activeProcessKey, leftHand);
+  const shouldLoop = activeProcessKey !== "space";
 
-  const event = {
-    time: loopManager ? loopManager.step / loopManager.loopLength : (millis() % parameterLoopLength) / parameterLoopLength,
-    type: "gesture",
-    note: selectedNote,
-    soundEngine: activeProcessKey,
-    filterValue: selectedFilter,
-    velocity: 0.34,
-    duration: "8n",
-    probability: 0.96,
-    texture: selectedFilter,
-    drift: 0,
-  };
+  if (!shouldLoop) {
+    visualSystem.createEventParticle(event);
+    if (audioReady && audioEngine) {
+      try {
+        audioEngine.playGestureEvent(event, Tone.now(), 1);
+      } catch (error) {
+        systemMessage = "lead event skipped";
+        console.error(error);
+      }
+    }
+    return;
+  }
 
   const memory = {
     id: millis() + "-" + activeProcessKey,
@@ -363,9 +389,12 @@ function triggerSelectedNote() {
     background: isBackgroundLoop,
   };
 
+  if (activeProcessKey === "motion") memory.events = createRegularPercussionEvents(event);
+  if (activeProcessKey === "texture") memory.events = createClickPatternEvents(event);
+
   if (isBackgroundLoop) {
-    loopMemories = loopMemories.filter((item) => !(item.key === "loopCreator" && item.background));
-    savedBlocks = savedBlocks.filter((block) => !(block.key === "loopCreator" && block.background));
+    loopMemories = loopMemories.filter((item) => !(item.key === activeProcessKey && item.background));
+    savedBlocks = savedBlocks.filter((block) => !(block.key === activeProcessKey && block.background));
   }
 
   loopMemories.push(memory);
@@ -384,6 +413,83 @@ function triggerSelectedNote() {
       console.error(error);
     }
   }
+}
+
+function createGestureEvent(engineKey, leftHand) {
+  const base = {
+    time: loopManager ? loopManager.step / loopManager.loopLength : (millis() % parameterLoopLength) / parameterLoopLength,
+    type: "gesture",
+    note: selectedNote,
+    soundEngine: engineKey,
+    filterValue: selectedFilter,
+    velocity: 0.58,
+    duration: "8n",
+    probability: 0.96,
+    texture: selectedFilter,
+    drift: 0,
+  };
+
+  if (engineKey === "loopCreator") {
+    const chordIndex = floor(constrain(map(getScaleIndex(selectedNote), 0, fixedScale.length - 1, 0, chordBank.length), 0, chordBank.length - 0.001));
+    return { ...base, type: "chord", chord: chordBank[chordIndex], inversion: floor(random(0, 3)), velocitySpread: random(0.08, 0.32) };
+  }
+
+  if (engineKey === "motion") {
+    const subdivision = rhythmSubdivisions[floor(constrain(map(selectedFilter, 0, 1, 0, rhythmSubdivisions.length), 0, rhythmSubdivisions.length - 0.001))];
+    return { ...base, type: "percussion", subdivision, randomHits: floor(map(getNoteHeightValue(), 0, 1, 0, 9)), probability: map(getNoteHeightValue(), 0, 1, 0.15, 0.7) };
+  }
+
+  if (engineKey === "texture") {
+    return { ...base, type: "clickPattern", distortion: getNoteHeightValue(), note: fixedScale[floor(selectedFilter * (fixedScale.length - 0.001))] };
+  }
+
+  if (engineKey === "decay") {
+    return { ...base, type: "sample", sampleIndex: selectedSampleIndex };
+  }
+
+  return { ...base, type: "lead", note: selectedNote, velocity: map(getHandCloseness(leftHand), 0, 1, 0.22, 0.92) };
+}
+
+function createRegularPercussionEvents(source) {
+  const events = [];
+  const regularCount = source.subdivision;
+  for (let i = 0; i < regularCount; i++) {
+    events.push({ ...source, time: i / regularCount, probability: 1, random: false });
+  }
+  for (let i = 0; i < source.randomHits; i++) {
+    events.push({ ...source, time: random(), probability: source.probability, random: true, velocity: source.velocity * random(0.45, 0.9) });
+  }
+  return events.sort((a, b) => a.time - b.time);
+}
+
+function createClickPatternEvents(source) {
+  const count = floor(map(getNoteHeightValue(), 0, 1, 2, 12));
+  const events = [];
+  for (let i = 0; i < count; i++) {
+    events.push({ ...source, time: i / count, probability: random(0.55, 0.95), velocity: source.velocity * random(0.45, 0.95) });
+  }
+  return events;
+}
+
+function getScaleIndex(note) {
+  return max(0, fixedScale.indexOf(note));
+}
+
+function getNoteHeightValue() {
+  return fixedScale.indexOf(selectedNote) / (fixedScale.length - 1);
+}
+
+function getHandCloseness(hand) {
+  if (!HandTracker.isValidHand(hand)) return 0.45;
+  const wrist = hand.keypoints[0];
+  const middleTip = hand.keypoints[fingerTips.middle];
+  const indexTip = hand.keypoints[fingerTips.index];
+  const pinkyTip = hand.keypoints[fingerTips.pinky];
+  if (!isFinitePoint(wrist) || !isFinitePoint(middleTip) || !isFinitePoint(indexTip) || !isFinitePoint(pinkyTip)) return 0.45;
+  const verticalSize = dist(wrist.x, wrist.y, middleTip.x, middleTip.y);
+  const widthSize = dist(indexTip.x, indexTip.y, pinkyTip.x, pinkyTip.y);
+  const handSize = max(verticalSize, widthSize);
+  return constrain(map(handSize, 95, 260, 0, 1), 0, 1);
 }
 
 function saveActiveProcess() {
@@ -506,15 +612,15 @@ function memoryFade(memory) {
 
 class AudioEngine {
   constructor() {
-    this.master = new Tone.Gain(0.48).toDestination();
-    this.memoryFilter = new Tone.Filter(7200, "lowpass");
-    this.memoryDistortion = new Tone.Distortion(0.015);
+    this.master = new Tone.Gain(0.74).toDestination();
+    this.memoryFilter = new Tone.Filter(5200, "lowpass");
+    this.memoryDistortion = new Tone.Distortion(0.008);
     this.memoryCrusher = new Tone.BitCrusher(8);
     this.delay = new Tone.FeedbackDelay("8n", 0.16);
     this.pingDelay = new Tone.PingPongDelay("4n", 0.18);
-    this.reverb = new Tone.Reverb({ decay: 4.8, wet: 0.22 });
+    this.reverb = new Tone.Reverb({ decay: 6.4, wet: 0.28 });
     this.width = new Tone.Panner(0);
-    this.mainGain = new Tone.Gain(0.72);
+    this.mainGain = new Tone.Gain(0.82);
 
     this.mainGain.chain(this.memoryFilter, this.memoryDistortion, this.memoryCrusher, this.delay, this.reverb, this.width, this.master);
     this.mainGain.connect(this.master);
@@ -525,25 +631,26 @@ class AudioEngine {
     this.textureEngine = this.createTextureEngine();
     this.spaceEngine = this.createSpaceEngine();
     this.memoryEngine = this.createMemoryEngine();
+    this.sampleEngine = this.createSampleEngine();
   }
 
   createLoopCreatorEngine() {
-    const noteFilter = new Tone.Filter(1800, "lowpass").connect(this.mainGain);
-    const noteGain = new Tone.Gain(0.32).connect(noteFilter);
+    const noteFilter = new Tone.Filter(1050, "lowpass").connect(this.mainGain);
+    const noteGain = new Tone.Gain(0.58).connect(noteFilter);
     const voice = new Tone.PolySynth(Tone.FMSynth, {
-      harmonicity: 1.28,
-      modulationIndex: 1.7,
+      harmonicity: 0.74,
+      modulationIndex: 0.42,
       oscillator: { type: "sine" },
-      envelope: { attack: 0.012, decay: 0.2, sustain: 0.15, release: 1.4 },
-      modulationEnvelope: { attack: 0.01, decay: 0.1, sustain: 0.05, release: 0.4 },
+      envelope: { attack: 1.2, decay: 1.4, sustain: 0.52, release: 5.2 },
+      modulationEnvelope: { attack: 1.6, decay: 1.2, sustain: 0.12, release: 4.2 },
     }).connect(noteGain);
 
-    const pluckFilter = new Tone.Filter(1100, "lowpass").connect(this.mainGain);
-    const pluckGain = new Tone.Gain(0.2).connect(pluckFilter);
+    const pluckFilter = new Tone.Filter(850, "lowpass").connect(this.mainGain);
+    const pluckGain = new Tone.Gain(0.34).connect(pluckFilter);
     const pluck = new Tone.PluckSynth({
-      attackNoise: 0.35,
-      dampening: 1800,
-      resonance: 0.62,
+      attackNoise: 0.18,
+      dampening: 950,
+      resonance: 0.38,
     }).connect(pluckGain);
 
     const clickGain = new Tone.Gain(0).connect(this.mainGain);
@@ -575,6 +682,12 @@ class AudioEngine {
     return { age: 0, dropout: 0, filter: 7200 };
   }
 
+  createSampleEngine() {
+    const gain = new Tone.Gain(0.72).connect(this.mainGain);
+    const players = samplePaths.map((path) => new Tone.Player(path).connect(gain));
+    return { gain, players };
+  }
+
   async start() {
     await Tone.start();
     await Tone.loaded();
@@ -589,11 +702,11 @@ class AudioEngine {
   }
 
   updateFromLayers(layerState) {
-    const filterFrequency = map(selectedFilter, 0, 1, 420, 5200);
+    const filterFrequency = map(selectedFilter, 0, 1, 260, 2600);
     this.loopEngine.noteFilter.frequency.value = filterFrequency;
     this.loopEngine.pluckFilter.frequency.value = filterFrequency;
-    this.memoryFilter.frequency.value = map(selectedFilter, 0, 1, 900, 7600);
-    this.reverb.wet.value = map(selectedFilter, 0, 1, 0.12, 0.36);
+    this.memoryFilter.frequency.value = map(selectedFilter, 0, 1, 700, 5200);
+    this.reverb.wet.value = map(selectedFilter, 0, 1, 0.24, 0.46);
   }
 
   playEvent(event, time, params) {
@@ -630,49 +743,77 @@ class AudioEngine {
   }
 
   playGestureEvent(event, time, fade) {
-    const velocity = constrain((event.velocity || 0.32) * fade, 0.01, 0.6);
-    const filterFrequency = map(event.filterValue || 0.5, 0, 1, 420, 5200);
+    const velocity = constrain((event.velocity || 0.58) * fade, 0.04, 0.9);
+    const filterFrequency = map(event.filterValue || 0.5, 0, 1, 260, 2600);
     this.loopEngine.noteFilter.frequency.value = filterFrequency;
     this.loopEngine.pluckFilter.frequency.value = filterFrequency;
 
-    if (event.soundEngine === "loopCreator") {
-      this.loopEngine.voice.triggerAttackRelease(event.note, "1m", time, velocity * 0.55);
+    if (event.type === "chord") {
+      this.playDroneChord(event, time, velocity);
       return;
     }
 
-    if (event.soundEngine === "motion") {
-      this.loopEngine.pluck.triggerAttackRelease(event.note, "8n", time, velocity);
+    if (event.type === "percussion") {
+      if (random() > event.probability) return;
+      this.triggerGate(this.loopEngine.click, this.loopEngine.clickGain, noteToFrequency("C3") * random([0.5, 1, 2]), event.random ? 0.011 : 0.018, time, velocity * (event.random ? 0.55 : 0.9));
       return;
     }
 
-    if (event.soundEngine === "texture") {
-      this.triggerGate(this.loopEngine.click, this.loopEngine.clickGain, noteToFrequency(event.note) * 2, 0.012, time, velocity * 0.7);
+    if (event.type === "clickPattern") {
+      if (random() > event.probability) return;
+      this.memoryDistortion.distortion = map(event.distortion || 0.2, 0, 1, 0.01, 0.28);
+      this.triggerGate(this.loopEngine.click, this.loopEngine.clickGain, noteToFrequency(event.note) * random([1, 1.5, 2]), 0.008, time, velocity * 0.72);
       return;
     }
 
-    if (event.soundEngine === "space") {
-      this.playTextureTick(time, { density: 0.65, variation: 0.2, depth: event.filterValue || 0.5, chance: 0.35 });
+    if (event.type === "lead") {
+      this.loopEngine.pluck.triggerAttackRelease(event.note, "8n", time, velocity * 0.82);
       return;
     }
 
-    if (event.soundEngine === "decay") {
-      this.triggerGate(this.loopEngine.click, this.loopEngine.clickGain, noteToFrequency(event.note) * random([0.5, 2, 3]), 0.018, time, velocity * 0.85);
-      this.playMemoryTick(time, { density: 0.45, variation: 0.25, depth: event.filterValue || 0.5, chance: 0.65 });
+    if (event.type === "sample") {
+      this.playSample(event, time, velocity);
+      return;
     }
+
+    this.loopEngine.pluck.triggerAttackRelease(event.note, "8n", time, velocity * 0.7);
+  }
+
+  playDroneChord(event, time, velocity) {
+    const chord = randomizeInversion(event.chord || chordBank[0], event.inversion || 0);
+    const filterFrequency = map(event.filterValue || 0.5, 0, 1, 260, 2600) * random(0.86, 1.16);
+    this.loopEngine.noteFilter.frequency.value = constrain(filterFrequency, 180, 3200);
+    for (let i = 0; i < chord.length; i++) {
+      const relativeVelocity = constrain(velocity * random(0.65, 1.05 + (event.velocitySpread || 0.1)), 0.03, 0.9);
+      this.loopEngine.voice.triggerAttackRelease(chord[i], "1m", time + i * random(0.01, 0.045), relativeVelocity * 0.5);
+    }
+  }
+
+  playSample(event, time, velocity) {
+    if (!this.sampleEngine.players.length) {
+      this.triggerGate(this.loopEngine.click, this.loopEngine.clickGain, noteToFrequency("C3"), 0.04, time, velocity);
+      return;
+    }
+    const index = event.sampleIndex % this.sampleEngine.players.length;
+    const player = this.sampleEngine.players[index];
+    if (!player || !player.loaded) return;
+    player.volume.value = map(velocity, 0, 1, -22, -4);
+    player.playbackRate = random([0.75, 1, 1, 1.25]);
+    player.start(time);
   }
 
   playTextureTick(time, params) {
     if (random() > map(params.density + params.chance, 0, 2, 0.05, 0.72)) return;
     this.textureEngine.crackleGain.gain.cancelScheduledValues(time);
     this.textureEngine.crackleGain.gain.setValueAtTime(0, time);
-    this.textureEngine.crackleGain.gain.linearRampToValueAtTime(map(params.depth, 0, 1, 0.006, 0.055), time + 0.001);
-    this.textureEngine.crackleGain.gain.exponentialRampToValueAtTime(0.0001, time + random(0.01, 0.05));
+    this.textureEngine.crackleGain.gain.linearRampToValueAtTime(map(params.depth, 0, 1, 0.006, 0.045), time + 0.001);
+    this.textureEngine.crackleGain.gain.exponentialRampToValueAtTime(0.0001, time + random(0.025, 0.09));
   }
 
   playMemoryTick(time, params) {
     if (random() > map(params.chance + params.density, 0, 2, 0.02, 0.36)) return;
-    this.memoryFilter.frequency.setValueAtTime(random(450, 2200), time);
-    this.memoryFilter.frequency.rampTo(map(params.depth, 0, 1, 6000, 900), random(0.08, 0.28));
+    this.memoryFilter.frequency.setValueAtTime(random(420, 1600), time);
+    this.memoryFilter.frequency.rampTo(map(params.depth, 0, 1, 3600, 650), random(0.18, 0.48));
   }
 
   triggerGate(oscillator, gainNode, frequency, duration, time, velocity) {
@@ -896,7 +1037,7 @@ class VisualSystem {
       fill(255);
       textSize(10);
       text(processShortNames[block.key], block.x, block.y + 84);
-      text(memory.background ? "BG LOOP" : (memory.maxCycles - memory.cycleCount) + "x left", block.x + 44, block.y + 84);
+      text(memory.background ? (block.key === "motion" ? "PERC LOOP" : "BG LOOP") : (memory.maxCycles - memory.cycleCount) + "x left", block.x + 44, block.y + 84);
     }
   }
 
@@ -952,10 +1093,10 @@ class VisualSystem {
     textSize(13);
     text(audioReady ? "living loops active" : "show hands to start audio", 34, 92);
     text(systemMessage || this.layerStatus(activeFinger), 34, 114);
-    text("left index: Y note | X filter brightness", 34, 138);
+    text("left index: Y pitch/pattern | X filter/subdivision/grid", 34, 138);
     text("left thumb + index pinch: trigger and store event", 34, 156);
-    text("right hand: 1 pad | 2 bell | 3 click | 4 noise | 5 glitch", 34, 174);
-    text("note " + selectedNote + " / filter " + nf(selectedFilter * 100, 2, 0) + "%", 34, 192);
+    text("right hand: 1 drone | 2 perc loop | 3 clicks | 4 lead | 5 samples", 34, 174);
+    text("note " + selectedNote + " / filter " + nf(selectedFilter * 100, 2, 0) + "% / sample " + (selectedSampleIndex + 1), 34, 192);
 
     const startX = width - 310;
     const startY = 26;
@@ -975,7 +1116,7 @@ class VisualSystem {
       fill(255);
       textSize(12);
       const count = loopMemories.filter((memory) => memory.key === key).length;
-      text(processShortNames[key] + (hasBackground ? " / bg loop" : count ? " / " + count + " active" : " / empty"), startX + 28, y + 2);
+      text(processShortNames[key] + (hasBackground ? (key === "motion" ? " / perc loop" : " / bg loop") : count ? " / " + count + " active" : " / empty"), startX + 28, y + 2);
     }
 
     if (activeProcessKey) this.drawParamBars(layers[activeProcessKey].params, 34, 236);
@@ -1005,6 +1146,7 @@ class VisualSystem {
     const progress = layer.stillSince ? constrain((millis() - layer.stillSince) / stillSaveTime, 0, 1) : 0;
     if (millis() < saveCooldownUntil) return "status: saved, move before saving again";
     if (activeProcessKey === "loopCreator" && loopMemories.some((memory) => memory.key === "loopCreator" && memory.background)) return "status: 1-finger pad is looping in background";
+    if (activeProcessKey === "motion" && loopMemories.some((memory) => memory.key === "motion" && memory.background)) return "status: 2-finger percussion is looping";
     if (layer.saved && !layer.movedAfterSave) return "status: event remembered for " + loopLifetimeCycles + " cycles";
     if (!activeFinger) return "status: shaping process";
     return "status: pinch left thumb + index to place sound";
@@ -1105,6 +1247,16 @@ function mutateNote(event, amount) {
 
 function noteToFrequency(note) {
   return Tone.Frequency(note).toFrequency();
+}
+
+function randomizeInversion(chord, inversion) {
+  const notes = chord.slice();
+  const rotations = floor(random(0, max(1, inversion + 2)));
+  for (let i = 0; i < rotations; i++) {
+    const note = notes.shift();
+    notes.push(Tone.Frequency(Tone.Frequency(note).toMidi() + 12, "midi").toNote());
+  }
+  return notes;
 }
 
 function lerpPoint(a, b, amount) {
