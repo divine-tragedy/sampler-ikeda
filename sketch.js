@@ -111,6 +111,14 @@ let layers = {};
 let loopMemories = [];
 let particles = [];
 let savedBlocks = [];
+let audioAnalysis = {
+  amp: 0,
+  bass: 0,
+  mid: 0,
+  treble: 0,
+  waveform: [],
+  fft: [],
+};
 
 function preload() {
   handPose = ml5.handPose({
@@ -122,6 +130,7 @@ function preload() {
 function setup() {
   createCanvas(canvasW, canvasH);
   pixelDensity(1);
+  frameRate(30);
   textFont("monospace");
 
   try {
@@ -156,6 +165,8 @@ function drawFrame() {
   const leftHand = HandTracker.getHandBySide(sorted, "Left", 0);
   const rightHand = HandTracker.getHandBySide(sorted, "Right", 1);
   const activeFinger = GestureDetector.getActiveRightGesture(rightHand);
+  const gesturePoint = getGestureSpatialPoint(leftHand, activeFinger, rightHand);
+  audioAnalysis = readAudioAnalysis();
 
   if (!audioReady && !audioStarting && activeFinger && millis() - lastAudioStartAttempt > 2400) {
     startAudioFromHands();
@@ -172,20 +183,42 @@ function drawFrame() {
   handlePinchTrigger(leftHand);
   updateProcessSmoothing();
   recordActiveProcessParams();
-  updateAudioSafely();
+  updateAudioSafely(gesturePoint);
 
-  visualSystem.update(activeProcessKey, layers);
+  visualSystem.update(activeProcessKey, layers, audioAnalysis, gesturePoint);
   visualSystem.drawBackground();
+  visualSystem.drawAudioReactiveLayer(audioAnalysis);
   visualSystem.drawSavedBlocks();
   visualSystem.drawParticles();
   visualSystem.drawHands(sorted, activeFinger, leftHand);
   visualSystem.drawInterface(activeFinger);
 }
 
-function updateAudioSafely() {
+function readAudioAnalysis() {
+  if (!audioReady || !audioEngine) {
+    return {
+      ...audioAnalysis,
+      amp: audioAnalysis.amp * 0.92,
+      bass: audioAnalysis.bass * 0.92,
+      mid: audioAnalysis.mid * 0.92,
+      treble: audioAnalysis.treble * 0.92,
+    };
+  }
+
+  try {
+    return audioEngine.getAnalysis(audioAnalysis);
+  } catch (error) {
+    systemMessage = "audio analyser paused, visuals still active";
+    console.error(error);
+    return audioAnalysis;
+  }
+}
+
+function updateAudioSafely(gesturePoint) {
   if (!audioReady || !audioEngine || !audioModulationEnabled) return;
   try {
     audioEngine.updateFromLayers(layers);
+    audioEngine.setSpatialPosition(gesturePoint);
   } catch (error) {
     audioModulationEnabled = false;
     systemMessage = "audio running without continuous modulation";
@@ -349,6 +382,25 @@ function getSampleGridIndex(point) {
   return row * 4 + col;
 }
 
+function getLeftIndexPoint(leftHand) {
+  if (!HandTracker.isValidHand(leftHand)) return null;
+  const point = leftHand.keypoints[fingerTips.index];
+  return isFinitePoint(point) ? point : null;
+}
+
+function getGestureSpatialPoint(leftHand, activeFinger, rightHand) {
+  const leftIndex = getLeftIndexPoint(leftHand);
+  if (leftIndex) return leftIndex;
+  if (activeFinger && isFinitePoint(activeFinger.point)) return activeFinger.point;
+  if (HandTracker.isValidHand(rightHand) && isFinitePoint(rightHand.keypoints[0])) return rightHand.keypoints[0];
+  return null;
+}
+
+function getPanFromPoint(point) {
+  if (!isFinitePoint(point)) return 0;
+  return constrain(map(point.x, 0, width, -0.9, 0.9), -0.9, 0.9);
+}
+
 function handlePinchTrigger(leftHand) {
   const pinchActive = GestureDetector.isThumbIndexPinch(leftHand);
   if (pinchActive && !leftPinchWasActive) triggerSelectedNote(leftHand);
@@ -416,6 +468,7 @@ function triggerSelectedNote(leftHand) {
 }
 
 function createGestureEvent(engineKey, leftHand) {
+  const spatialPoint = getLeftIndexPoint(leftHand);
   const base = {
     time: loopManager ? loopManager.step / loopManager.loopLength : (millis() % parameterLoopLength) / parameterLoopLength,
     type: "gesture",
@@ -427,6 +480,9 @@ function createGestureEvent(engineKey, leftHand) {
     probability: 0.96,
     texture: selectedFilter,
     drift: 0,
+    pan: getPanFromPoint(spatialPoint),
+    visualX: spatialPoint ? spatialPoint.x : width * 0.5,
+    visualY: spatialPoint ? spatialPoint.y : height * 0.5,
   };
 
   if (engineKey === "loopCreator") {
@@ -613,6 +669,8 @@ function memoryFade(memory) {
 class AudioEngine {
   constructor() {
     this.master = new Tone.Gain(0.74).toDestination();
+    this.outputAnalyser = new Tone.Analyser("waveform", 1024);
+    this.fftAnalyser = new Tone.Analyser("fft", 64);
     this.memoryFilter = new Tone.Filter(5200, "lowpass");
     this.memoryDistortion = new Tone.Distortion(0.008);
     this.memoryCrusher = new Tone.BitCrusher(8);
@@ -624,6 +682,8 @@ class AudioEngine {
 
     this.mainGain.chain(this.memoryFilter, this.memoryDistortion, this.memoryCrusher, this.delay, this.reverb, this.width, this.master);
     this.mainGain.connect(this.master);
+    this.master.connect(this.outputAnalyser);
+    this.master.connect(this.fftAnalyser);
     this.pingDelay.connect(this.reverb);
 
     this.loopEngine = this.createLoopCreatorEngine();
@@ -701,6 +761,39 @@ class AudioEngine {
     Tone.Transport.start();
   }
 
+  getAnalysis(previous) {
+    const waveform = Array.from(this.outputAnalyser.getValue());
+    const fft = Array.from(this.fftAnalyser.getValue());
+    let sum = 0;
+    for (const sample of waveform) sum += sample * sample;
+    const rawAmp = waveform.length ? Math.sqrt(sum / waveform.length) : 0;
+    const normalizedAmp = constrain(rawAmp * 3.2, 0, 1);
+    const smoothedAmp = lerp(previous ? previous.amp : 0, normalizedAmp, 0.35);
+    const normalizedFft = fft.map((value) => constrain(map(value, -110, -18, 0, 1), 0, 1));
+    return {
+      amp: smoothedAmp,
+      bass: averageRange(normalizedFft, 0, 8),
+      mid: averageRange(normalizedFft, 8, 28),
+      treble: averageRange(normalizedFft, 28, normalizedFft.length),
+      waveform,
+      fft: normalizedFft,
+    };
+  }
+
+  setSpatialPosition(point) {
+    this.setPanValue(getPanFromPoint(point), 0.08);
+  }
+
+  setPanValue(pan, rampTime) {
+    if (!this.width || !this.width.pan || !Number.isFinite(pan)) return;
+    const target = constrain(pan, -0.9, 0.9);
+    if (typeof this.width.pan.rampTo === "function") {
+      this.width.pan.rampTo(target, rampTime);
+    } else {
+      this.width.pan.value = target;
+    }
+  }
+
   updateFromLayers(layerState) {
     const filterFrequency = map(selectedFilter, 0, 1, 260, 2600);
     this.loopEngine.noteFilter.frequency.value = filterFrequency;
@@ -743,6 +836,7 @@ class AudioEngine {
   }
 
   playGestureEvent(event, time, fade) {
+    this.setPanValue(event.pan, 0.03);
     const velocity = constrain((event.velocity || 0.58) * fade, 0.04, 0.9);
     const filterFrequency = map(event.filterValue || 0.5, 0, 1, 260, 2600);
     this.loopEngine.noteFilter.frequency.value = filterFrequency;
@@ -891,9 +985,11 @@ class VisualSystem {
       space: 0.1,
       decay: 0.08,
     };
+    this.audioObjects = [];
+    this.globalAmp = 0;
   }
 
-  update(activeKey, layerState) {
+  update(activeKey, layerState, analysis, gesturePoint) {
     const loop = getPlaybackParams("loopCreator");
     const motion = getPlaybackParams("motion");
     const texture = getPlaybackParams("texture");
@@ -905,16 +1001,41 @@ class VisualSystem {
     this.state.drift = lerp(this.state.drift, motion ? motion.variation : 0.06, 0.06);
     this.state.space = lerp(this.state.space, space ? space.depth : 0.1, 0.06);
     this.state.decay = lerp(this.state.decay, decay ? decay.chance + decay.depth * 0.4 : 0.06, 0.06);
+    this.globalAmp = lerp(this.globalAmp, analysis ? analysis.amp : 0, 0.35);
+
+    if (activeKey && isFinitePoint(gesturePoint)) {
+      const object = this.getOrCreateAudioObject(activeKey, gesturePoint);
+      object.updateTarget(gesturePoint);
+      object.hold = max(object.hold, this.globalAmp * 0.9 + 0.08);
+    }
+
+    for (let i = this.audioObjects.length - 1; i >= 0; i--) {
+      const object = this.audioObjects[i];
+      object.update(analysis || audioAnalysis, activeKey === object.key);
+      if (object.dead()) this.audioObjects.splice(i, 1);
+    }
   }
 
   drawBackground() {
     const c = this.mainColor();
     const flicker = random() < this.state.decay * 0.08 ? random(-28, 28) : 0;
-    background(
-      constrain(red(c) + flicker, 0, 255),
-      constrain(green(c) + flicker * 0.3, 0, 255),
-      constrain(blue(c) + flicker, 0, 255)
-    );
+    if (frameCount < 3) {
+      background(
+        constrain(red(c) + flicker, 0, 255),
+        constrain(green(c) + flicker * 0.3, 0, 255),
+        constrain(blue(c) + flicker, 0, 255)
+      );
+    } else {
+      background(0, 22 + this.globalAmp * 18);
+      noStroke();
+      fill(
+        constrain(red(c) + flicker, 0, 255),
+        constrain(green(c) + flicker * 0.3, 0, 255),
+        constrain(blue(c) + flicker, 0, 255),
+        18 + this.globalAmp * 18
+      );
+      rect(0, 0, width, height);
+    }
 
     noStroke();
     const grid = floor(map(constrain(this.state.pixelDust, 0, 1), 0, 1, 36, 12));
@@ -946,6 +1067,35 @@ class VisualSystem {
         const r = 120 + i * 90 + sin(frameCount * 0.01 + i) * 30;
         rect(width * 0.5 - r, height * 0.5 - r * 0.45, r * 2, r * 0.9);
       }
+    }
+  }
+
+  getOrCreateAudioObject(key, point) {
+    let object = this.audioObjects.find((item) => item.key === key && item.anchor === "gesture");
+    if (!object) {
+      object = new ReactiveGestureVisual(key, point, "gesture");
+      this.audioObjects.push(object);
+    }
+    return object;
+  }
+
+  pulseAudioObject(event) {
+    const key = event.soundEngine || activeProcessKey || "loopCreator";
+    const point = {
+      x: Number.isFinite(event.visualX) ? event.visualX : width * 0.5,
+      y: Number.isFinite(event.visualY) ? event.visualY : height * 0.5,
+    };
+    const object = new ReactiveGestureVisual(key, point, event.type || "event");
+    object.hold = constrain((event.velocity || 0.5) + this.globalAmp, 0.18, 1);
+    object.life = event.type === "lead" ? 56 : 104;
+    object.radius *= event.type === "chord" ? 1.55 : event.type === "sample" ? 1.3 : 1;
+    this.audioObjects.push(object);
+    while (this.audioObjects.length > 18) this.audioObjects.shift();
+  }
+
+  drawAudioReactiveLayer(analysis) {
+    for (const object of this.audioObjects) {
+      object.display(analysis || audioAnalysis);
     }
   }
 
@@ -982,14 +1132,19 @@ class VisualSystem {
   }
 
   createEventParticle(event) {
+    this.pulseAudioObject(event);
+    const key = event.soundEngine || event.key || activeProcessKey || "loopCreator";
+    const c = processColors[key] || processColors.loopCreator;
+    const x = Number.isFinite(event.visualX) ? event.visualX : random(width * 0.22, width * 0.78);
+    const y = Number.isFinite(event.visualY) ? event.visualY : random(height * 0.22, height * 0.72);
     particles.push({
-      x: random(width * 0.22, width * 0.78),
-      y: random(height * 0.22, height * 0.72),
+      x,
+      y,
       vx: random(-0.5, 0.5),
       vy: random(-0.8, 0.8),
-      size: event.type === "click" ? 4 : 7,
+      size: event.type === "click" || event.type === "clickPattern" ? 4 : 7,
       life: 46,
-      color: processColors.loopCreator,
+      color: c,
     });
   }
 
@@ -1153,6 +1308,123 @@ class VisualSystem {
   }
 }
 
+class ReactiveGestureVisual {
+  constructor(key, point, anchor) {
+    this.key = key;
+    this.anchor = anchor;
+    this.x = point.x;
+    this.y = point.y;
+    this.targetX = point.x;
+    this.targetY = point.y;
+    this.seed = random(1000);
+    this.clock = random(100);
+    this.hold = 0.08;
+    this.life = anchor === "gesture" ? 160 : 96;
+    this.maxLife = this.life;
+    this.radius = this.baseRadius();
+    this.aspect = key === "space" ? 0.58 : key === "motion" ? 0.74 : 0.92;
+    this.spin = random([-1, 1]) * random(0.002, 0.007);
+  }
+
+  baseRadius() {
+    if (this.key === "loopCreator") return random(86, 124);
+    if (this.key === "motion") return random(44, 72);
+    if (this.key === "texture") return random(30, 54);
+    if (this.key === "space") return random(72, 112);
+    if (this.key === "decay") return random(58, 92);
+    return random(48, 84);
+  }
+
+  updateTarget(point) {
+    this.targetX = point.x;
+    this.targetY = point.y;
+  }
+
+  update(analysis, active) {
+    const amp = analysis ? analysis.amp : 0;
+    this.clock += 0.004 + amp * 0.035 + abs(this.spin);
+    this.x = lerp(this.x, this.targetX, 0.08 + amp * 0.08);
+    this.y = lerp(this.y, this.targetY, 0.08 + amp * 0.08);
+    this.hold = lerp(this.hold, amp, active ? 0.16 : 0.08);
+    if (active && this.anchor === "gesture") {
+      this.life = min(this.maxLife, this.life + 4);
+    } else {
+      this.life--;
+    }
+  }
+
+  dead() {
+    return this.life <= 0 && this.hold < 0.025;
+  }
+
+  display(analysis) {
+    const waveform = analysis && analysis.waveform ? analysis.waveform : [];
+    const band = this.bandLevel(analysis);
+    const amp = constrain(max(analysis ? analysis.amp : 0, this.hold * 0.85), 0, 1);
+    const lifeFade = constrain(this.life / this.maxLife, 0, 1);
+    const c = processColors[this.key] || [255, 255, 255];
+    const alpha = lifeFade * (30 + amp * 200);
+    const detail = this.key === "texture" ? 132 : 104;
+    const noiseScale = this.key === "motion" ? 86 : this.key === "texture" ? 118 : 72;
+    const ampRadius = this.radius * (1 + amp * 0.42 + band * 0.18);
+
+    push();
+    translate(this.x, this.y);
+    rotate(sin(this.clock * 0.6) * 0.18 + this.spin * frameCount);
+    noFill();
+    stroke(c[0], c[1], c[2], alpha);
+    strokeWeight(1 + amp * 7);
+    fill(c[0], c[1], c[2], lifeFade * (8 + amp * 34));
+
+    beginShape();
+    for (let step = 0; step <= detail; step++) {
+      const i = map(step, 0, detail, 0, TWO_PI);
+      const wave = waveform.length ? waveform[floor(map(step % detail, 0, detail, 0, waveform.length - 1))] : 0;
+      const slowNoise = noise(this.seed + cos(i) * 0.7, this.seed + sin(i) * 0.7, frameCount * 0.001);
+      const audioNoise = noise(this.seed * 0.13 + this.clock, i * 0.35);
+      const distortion = (slowNoise - 0.5) * 18 + (audioNoise - 0.5) * noiseScale * amp + wave * (12 + amp * 42);
+      const r = ampRadius + distortion;
+      vertex(cos(i) * r, sin(i) * r * this.aspect);
+    }
+    endShape(CLOSE);
+
+    noFill();
+    stroke(c[0], c[1], c[2], lifeFade * (18 + amp * 150));
+    strokeWeight(0.8 + amp * 3.5);
+    for (let ring = 1; ring <= 3; ring++) {
+      const offset = ring * (11 + amp * 17);
+      beginShape();
+      for (let step = 0; step <= detail; step += 2) {
+        const i = map(step, 0, detail, 0, TWO_PI);
+        const n = noise(this.seed + ring * 8, i, this.clock * 0.6);
+        const r = ampRadius + offset + (n - 0.5) * (20 + amp * 52);
+        vertex(cos(i) * r, sin(i) * r * this.aspect);
+      }
+      endShape(CLOSE);
+    }
+
+    stroke(c[0], c[1], c[2], lifeFade * (45 + amp * 170));
+    strokeWeight(1 + amp * 4);
+    for (let step = 0; step < detail; step += 8) {
+      const i = map(step, 0, detail, 0, TWO_PI);
+      const n = noise(this.seed * 2, i, this.clock);
+      const r = ampRadius + (n - 0.5) * (28 + amp * 80);
+      point(cos(i) * r, sin(i) * r * this.aspect);
+    }
+    pop();
+  }
+
+  bandLevel(analysis) {
+    if (!analysis) return 0;
+    if (this.key === "loopCreator") return analysis.bass || 0;
+    if (this.key === "motion") return analysis.mid || 0;
+    if (this.key === "texture") return analysis.treble || 0;
+    if (this.key === "space") return (analysis.mid || 0) * 0.5 + (analysis.treble || 0) * 0.5;
+    if (this.key === "decay") return (analysis.bass || 0) * 0.35 + (analysis.mid || 0) * 0.65;
+    return analysis.amp || 0;
+  }
+}
+
 class HandTracker {
   static getSortedHands(sourceHands) {
     return sourceHands.slice().filter(HandTracker.isValidHand).sort((a, b) => HandTracker.getHandCenterX(a) - HandTracker.getHandCenterX(b));
@@ -1247,6 +1519,15 @@ function mutateNote(event, amount) {
 
 function noteToFrequency(note) {
   return Tone.Frequency(note).toFrequency();
+}
+
+function averageRange(values, start, end) {
+  if (!values || !values.length || end <= start) return 0;
+  const safeStart = constrain(floor(start), 0, values.length);
+  const safeEnd = constrain(floor(end), safeStart, values.length);
+  let total = 0;
+  for (let i = safeStart; i < safeEnd; i++) total += values[i];
+  return safeEnd > safeStart ? total / (safeEnd - safeStart) : 0;
 }
 
 function randomizeInversion(chord, inversion) {
