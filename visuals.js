@@ -9,12 +9,31 @@ class VisualSystem {
     };
     this.audioObjects = [];
     this.globalAmp = 0;
-    this.oneFingerTrail = [];
-    this.oneFingerTextLayer = null;
-    this.oneFingerLayerSize = { width: 0, height: 0 };
+    this.textMask = null;
+    this.nextTextMask = null;
+    this.threeTextMask = null;
+    this.fourTextMask = null;
+    this.paintMask = null;
+    this.maskSize = { width: 0, height: 0 };
+    this.lastPaintPoint = null;
+    this.currentFingerPoint = null;
+    this.fillProgress = 0;
+    this.transitionProgress = 0;
+    this.nextPromptActive = false;
+    this.oneFingerStartedAt = null;
+    this.percussionDots = [];
+    this.twoFingerPoints = [];
+    this.twoFingerStartedAt = null;
+    this.percussionLoopCount = 0;
+    this.threePromptReadyAt = null;
+    this.threePromptProgress = 0;
+    this.threePromptStartedAt = null;
+    this.fourPromptProgress = 0;
+    this.spacing = 6;
+    this.dotSize = 3.2;
   }
 
-  update(activeKey, layerState, analysis, gesturePoint) {
+  update(activeKey, layerState, analysis, gesturePoint, activeFinger) {
     const loop = getPlaybackParams("loopCreator");
     const motion = getPlaybackParams("motion");
     const texture = getPlaybackParams("texture");
@@ -29,8 +48,12 @@ class VisualSystem {
     this.globalAmp = lerp(this.globalAmp, analysis ? analysis.amp : 0, 0.35);
 
     if (activeKey === "loopCreator" && isFinitePoint(gesturePoint)) {
-      this.addOneFingerTrail(gesturePoint);
+      this.updatePaintMask(gesturePoint);
+    } else {
+      this.currentFingerPoint = null;
     }
+    this.twoFingerPoints = activeKey === "motion" && activeFinger && activeFinger.points ? activeFinger.points : [];
+    if (activeKey === "motion" && this.twoFingerStartedAt === null) this.twoFingerStartedAt = millis();
 
     if (activeKey && activeKey !== "loopCreator" && isFinitePoint(gesturePoint)) {
       const object = this.getOrCreateAudioObject(activeKey, gesturePoint);
@@ -46,7 +69,7 @@ class VisualSystem {
   }
 
   drawBackground(gridVisible) {
-    if (activeProcessKey === "loopCreator") {
+    if (!activeProcessKey || activeProcessKey === "loopCreator" || activeProcessKey === "motion" || this.percussionDots.length || this.threePromptProgress > 0.01) {
       this.drawOneFingerVisual();
       return;
     }
@@ -90,6 +113,18 @@ class VisualSystem {
       x: Number.isFinite(event.visualX) ? event.visualX : width * 0.5,
       y: Number.isFinite(event.visualY) ? event.visualY : height * 0.5,
     };
+    if (event.loopMemoryId) {
+      const anchor = "loop-" + event.loopMemoryId;
+      let object = this.audioObjects.find((item) => item.anchor === anchor);
+      if (!object) {
+        object = new ReactiveGestureVisual(key, point, anchor);
+        this.audioObjects.push(object);
+      }
+      object.updateTarget(point);
+      object.hold = constrain((event.velocity || 0.5) + this.globalAmp, 0.24, 1);
+      object.life = object.maxLife;
+      return;
+    }
     const object = new ReactiveGestureVisual(key, point, event.type || "event");
     object.hold = constrain((event.velocity || 0.5) + this.globalAmp, 0.18, 1);
     object.life = event.type === "lead" ? 56 : 104;
@@ -99,102 +134,342 @@ class VisualSystem {
   }
 
   drawAudioReactiveLayer(analysis) {
-    if (activeProcessKey === "loopCreator") return;
     for (const object of this.audioObjects) {
       object.display(analysis || audioAnalysis);
     }
   }
 
-  addOneFingerTrail(point) {
-    this.oneFingerTrail.push({
-      x: point.x,
-      y: point.y,
-      hue: frameCount * 4.5,
-      life: 1,
-    });
-
-    while (this.oneFingerTrail.length > 33) this.oneFingerTrail.shift();
+  drawOneFingerVisual() {
+    this.ensureOneFingerMasks();
+    this.updateOneFingerTransition();
+    this.drawDottedFluidPattern();
+    if (activeProcessKey === "motion" || this.percussionDots.length) {
+      this.drawStoredPercussionDots();
+      if (activeProcessKey === "motion" && !this.percussionDots.length) this.drawTwoFingerEchoes();
+    } else {
+      this.drawOneFingerEcho();
+    }
+    this.drawThreeFingerPrompt();
   }
 
-  ensureOneFingerTextLayer() {
-    if (this.oneFingerTextLayer && this.oneFingerLayerSize.width === width && this.oneFingerLayerSize.height === height) return;
-    this.oneFingerTextLayer = createGraphics(width, height);
-    this.oneFingerLayerSize = { width, height };
-    this.drawOneFingerTextLayer();
+  ensureOneFingerMasks() {
+    if (this.textMask && this.paintMask && this.maskSize.width === width && this.maskSize.height === height) return;
+    this.textMask = createGraphics(width, height);
+    this.nextTextMask = createGraphics(width, height);
+    this.threeTextMask = createGraphics(width, height);
+    this.fourTextMask = createGraphics(width, height);
+    this.paintMask = createGraphics(width, height);
+    this.textMask.pixelDensity(1);
+    this.nextTextMask.pixelDensity(1);
+    this.threeTextMask.pixelDensity(1);
+    this.fourTextMask.pixelDensity(1);
+    this.paintMask.pixelDensity(1);
+    this.paintMask.background(0);
+    this.maskSize = { width, height };
+    this.lastPaintPoint = null;
+    this.currentFingerPoint = null;
+    this.fillProgress = 0;
+    this.transitionProgress = 0;
+    this.nextPromptActive = false;
+    this.oneFingerStartedAt = null;
+    this.twoFingerStartedAt = null;
+    this.threePromptReadyAt = null;
+    this.threePromptStartedAt = null;
+    this.threePromptProgress = 0;
+    this.fourPromptProgress = 0;
+    this.drawTextMask(this.textMask, "one finger", "up");
+    this.drawTextMask(this.nextTextMask, "two fingers", "+ PINCH");
+    this.drawTextMask(this.threeTextMask, "three", "fingers");
+    this.drawTextMask(this.fourTextMask, "four", "fingers");
   }
 
-  drawOneFingerTextLayer() {
-    if (!this.oneFingerTextLayer) return;
-    this.oneFingerTextLayer.clear();
-    this.oneFingerTextLayer.textAlign(CENTER, CENTER);
-    this.oneFingerTextLayer.textFont("monospace");
-    this.oneFingerTextLayer.textStyle(BOLD);
-    this.oneFingerTextLayer.textSize(min(width, height) * 0.12);
-    this.oneFingerTextLayer.fill(255, 90);
-    this.oneFingerTextLayer.noStroke();
-    this.oneFingerTextLayer.text("ONLY THUMB", width / 2, height / 2);
+  drawTextMask(mask, topLine, bottomLine) {
+    mask.background(0);
+    mask.fill(255);
+    mask.noStroke();
+    mask.textAlign(CENTER, CENTER);
+    mask.textStyle(BOLD);
+    mask.textSize(width * 0.18);
+    mask.text(topLine, width / 2, height / 2 - width * 0.07);
+    mask.text(bottomLine, width / 2, height / 2 + width * 0.1);
+    mask.loadPixels();
   }
 
-  eraseOneFingerText() {
-    this.ensureOneFingerTextLayer();
-    this.drawOneFingerTextLayer();
-    this.oneFingerTextLayer.erase();
+  updatePaintMask(point) {
+    this.ensureOneFingerMasks();
+    if (this.oneFingerStartedAt === null) this.oneFingerStartedAt = millis();
+    this.currentFingerPoint = { x: point.x, y: point.y };
+    const previous = this.lastPaintPoint || point;
+    if (dist(point.x, point.y, previous.x, previous.y) > 1) {
+      for (let i = 0; i < 4; i++) {
+        const t = i / 3;
+        const x = lerp(previous.x, point.x, t);
+        const y = lerp(previous.y, point.y, t);
+        this.drawFluidBrush(x, y);
+      }
+    } else {
+      this.drawFluidBrush(point.x, point.y);
+    }
+    this.lastPaintPoint = { x: point.x, y: point.y };
+  }
 
-    const eraseSize = min(width, height) * 0.18;
-    for (let i = 0; i < this.oneFingerTrail.length; i++) {
-      const p = this.oneFingerTrail[i];
-      const age = (i + 1) / max(1, this.oneFingerTrail.length);
-      this.oneFingerTextLayer.ellipse(p.x, p.y, eraseSize * age, eraseSize * age);
+  drawFluidBrush(cx, cy) {
+    this.paintMask.noStroke();
+    for (let i = 0; i < 5; i++) {
+      const angle = random(TWO_PI);
+      const radius = random(16, 86);
+      const x = cx + cos(angle) * radius;
+      const y = cy + sin(angle) * radius;
+      const w = random(96, 190);
+      const h = random(54, 132);
+      this.paintMask.push();
+      this.paintMask.translate(x, y);
+      this.paintMask.rotate(random(TWO_PI));
+      this.paintMask.fill(255, 55);
+      this.paintMask.ellipse(0, 0, w, h);
+      this.paintMask.pop();
+    }
+  }
+
+  drawOneFingerEcho() {
+    if (!isFinitePoint(this.currentFingerPoint)) return;
+    const pulse = (sin(frameCount * 0.22) + 1) * 0.5;
+    noFill();
+    for (let i = 0; i < 4; i++) {
+      stroke(255, 0, 0, 150 - i * 28);
+      strokeWeight(max(1, 3 - i * 0.45));
+      circle(this.currentFingerPoint.x, this.currentFingerPoint.y, 24 + i * 18 + pulse * 10);
+    }
+    noStroke();
+    fill(255, 0, 0, 230);
+    circle(this.currentFingerPoint.x, this.currentFingerPoint.y, 12);
+  }
+
+  drawTwoFingerEchoes() {
+    const pulse = (sin(frameCount * 0.22) + 1) * 0.5;
+    for (let i = 0; i < this.twoFingerPoints.length; i++) {
+      const item = this.twoFingerPoints[i];
+      if (!isFinitePoint(item.point)) continue;
+      noFill();
+      for (let echo = 0; echo < 3; echo++) {
+        stroke(35, 112, 255, 125 - echo * 28);
+        strokeWeight(max(1, 2.4 - echo * 0.35));
+        circle(item.point.x, item.point.y, 20 + echo * 14 + pulse * 8);
+      }
+      noStroke();
+      fill(35, 112, 255, 230);
+      circle(item.point.x, item.point.y, 10 + pulse * 2);
     }
 
-    this.oneFingerTextLayer.noErase();
+    if (!rightPinchActive) return;
+    const point = this.getTwoFingerCenter();
+    if (!isFinitePoint(point)) return;
+    noFill();
+    for (let i = 0; i < 4; i++) {
+      stroke(35, 112, 255, 150 - i * 28);
+      strokeWeight(max(1, 3 - i * 0.45));
+      circle(point.x, point.y, 42 + i * 24 + pulse * 18);
+    }
+    noStroke();
+    fill(35, 112, 255, 230);
+    circle(point.x, point.y, 16 + pulse * 4);
   }
 
-  drawOneFingerLightTrail() {
-    blendMode(ADD);
-    colorMode(HSB, 360, 100, 100, 100);
+  getTwoFingerCenter() {
+    if (!this.twoFingerPoints.length) return null;
+    let x = 0;
+    let y = 0;
+    let count = 0;
+    for (const item of this.twoFingerPoints) {
+      if (!isFinitePoint(item.point)) continue;
+      x += item.point.x;
+      y += item.point.y;
+      count++;
+    }
+    return count ? { x: x / count, y: y / count } : null;
+  }
 
-    const maxSize = min(width, height) * 0.18;
-    for (let i = 0; i < this.oneFingerTrail.length; i++) {
-      const p = this.oneFingerTrail[i];
-      const age = (i + 1) / max(1, this.oneFingerTrail.length);
-      const size = maxSize * age;
-      const opacity = age * 25;
-      p.life *= 0.96;
+  updateOneFingerTransition() {
+    if (this.oneFingerStartedAt !== null && millis() - this.oneFingerStartedAt >= 10000) this.nextPromptActive = true;
+    if (this.twoFingerStartedAt !== null && millis() - this.twoFingerStartedAt >= 10000) this.nextPromptActive = true;
+    if (this.percussionDots.length) this.nextPromptActive = true;
+    if (this.percussionLoopCount >= 4 && this.threePromptReadyAt === null) this.threePromptReadyAt = millis() + 2500;
+    if (this.threePromptReadyAt !== null && millis() >= this.threePromptReadyAt) {
+      this.threePromptProgress = lerp(this.threePromptProgress, 1, 0.035);
+      if (this.threePromptStartedAt === null && this.threePromptProgress > 0.92) this.threePromptStartedAt = millis();
+    }
+    if (this.threePromptStartedAt !== null && millis() - this.threePromptStartedAt >= 15000) {
+      this.fourPromptProgress = lerp(this.fourPromptProgress, 1, 0.035);
+    }
+    const target = this.nextPromptActive ? 1 : 0;
+    this.transitionProgress = lerp(this.transitionProgress, target, 0.035);
+    const baseBg = lerp(255, 0, this.transitionProgress);
+    const redBg = color(220, 24, 24);
+    const fourBg = color(0);
+    const stageBg = lerpColor(color(baseBg), redBg, this.threePromptProgress);
+    background(lerpColor(stageBg, fourBg, this.fourPromptProgress));
+  }
 
-      for (let r = size; r > 0; r -= 8) {
-        const fade = pow(r / max(1, size), 2.2);
-        const alpha = opacity * (1 - fade) * p.life;
-        const wobbleX = noise(i * 0.2, frameCount * 0.01) * 30 - 15;
-        const wobbleY = noise(i * 0.2 + 100, frameCount * 0.01) * 30 - 15;
-
-        fill((p.hue + r * 0.8 + i * 8) % 360, 70, 100, alpha);
-        ellipse(p.x + wobbleX, p.y + wobbleY, r * 1.15, r);
+  measurePaintCoverage() {
+    this.paintMask.loadPixels();
+    let filled = 0;
+    let total = 0;
+    for (let x = 0; x < width; x += this.spacing * 3) {
+      for (let y = 0; y < height; y += this.spacing * 3) {
+        const index = 4 * (x + y * width);
+        if (this.paintMask.pixels[index] > 35) filled++;
+        total++;
       }
     }
-
-    colorMode(RGB, 255, 255, 255, 255);
-    blendMode(BLEND);
+    return total ? filled / total : 0;
   }
 
-  drawOneFingerVisual() {
-    background(5, 5, 6);
-    this.eraseOneFingerText();
-    this.drawOneFingerLightTrail();
-    image(this.oneFingerTextLayer, 0, 0);
+  drawDottedFluidPattern() {
+    this.textMask.loadPixels();
+    this.nextTextMask.loadPixels();
+    this.paintMask.loadPixels();
+    noStroke();
+
+    for (let x = 0; x < width; x += this.spacing) {
+      for (let y = 0; y < height; y += this.spacing) {
+        const index = 4 * (x + y * width);
+        const textValue = this.textMask.pixels[index];
+        const nextTextValue = this.nextTextMask.pixels[index];
+        const paintValue = this.paintMask.pixels[index];
+        const insideText = textValue > 100;
+        const insideNextText = nextTextValue > 100;
+        const insidePaint = paintValue > 35;
+        const textWasTouched = insideText && insidePaint;
+        const showNextText = insideNextText && this.transitionProgress > 0.02;
+        const previousAlpha = 1 - this.threePromptProgress * 0.32;
+        const visibleShape = insidePaint || (insideText && !textWasTouched) || showNextText;
+        if (!visibleShape) continue;
+        const displaced = this.applyPercussionPacking(x, y);
+        if (showNextText) {
+          fill(255, min(255, 255 * this.transitionProgress * 1.15) * previousAlpha);
+          circle(displaced.x, displaced.y, this.dotSize);
+          continue;
+        }
+        if (insideText && !insidePaint) {
+          fill(lerp(0, 255, this.transitionProgress), 255 * (1 - this.transitionProgress) * previousAlpha);
+          circle(displaced.x, displaced.y, this.dotSize);
+          continue;
+        }
+
+        const flowA = noise(x * 0.006, y * 0.006, frameCount * 0.002);
+        const flowB = noise(x * 0.014 + 200, y * 0.014 - 100, frameCount * 0.001);
+        const wave = sin(flowA * 75 + flowB * 25 + x * 0.018 + y * 0.006 + frameCount * 0.025);
+        const greyWave = sin(flowA * 60 + flowB * 20 + x * 0.014 - y * 0.01 + frameCount * 0.02);
+        const paintEdge = paintValue > 35 && paintValue < 125;
+        const drawBlackDot = wave > 0.18;
+        const drawGreyDot = greyWave > 0.05 || paintEdge;
+
+        if (drawBlackDot) {
+          const blackDot = lerp(0, 255, this.transitionProgress);
+          fill(blackDot, 255 * previousAlpha);
+          circle(displaced.x, displaced.y, this.dotSize);
+        } else if (drawGreyDot) {
+          const greyDot = lerp(150, 105, this.transitionProgress);
+          fill(greyDot, 255 * previousAlpha);
+          circle(displaced.x, displaced.y, this.dotSize * 0.95);
+        }
+      }
+    }
+  }
+
+  applyPercussionPacking(x, y) {
+    if (!this.percussionDots.length) return { x, y };
+    let dx = 0;
+    let dy = 0;
+    for (const dot of this.percussionDots) {
+      const wobble = sin(frameCount * 0.035 + dot.seed) * 10;
+      const radius = dot.radius * 1.25 + wobble + min(220, dot.age * 0.42);
+      const distance = dist(x, y, dot.x, dot.y);
+      if (distance <= 0 || distance > radius) continue;
+      const force = pow(1 - distance / radius, 1.7) * radius * 0.72;
+      dx += ((x - dot.x) / distance) * force;
+      dy += ((y - dot.y) / distance) * force;
+    }
+    return { x: x + dx, y: y + dy };
+  }
+
+  addPercussionDots(memory) {
+    if (!memory || memory.key !== "motion") return;
+    this.percussionLoopCount++;
+    const event = memory.events[0] || {};
+    const baseX = Number.isFinite(event.visualX) ? event.visualX : width * 0.5;
+    const baseY = Number.isFinite(event.visualY) ? event.visualY : height * 0.5;
+    this.percussionDots.push({
+      id: memory.id,
+      x: baseX,
+      y: baseY,
+      seed: random(1000),
+      age: 0,
+      life: 1,
+      pulse: 1,
+      radius: random(68, 118),
+    });
+    while (this.percussionDots.length > 1) this.percussionDots.shift();
+  }
+
+  drawStoredPercussionDots() {
+    noFill();
+    for (const dot of this.percussionDots) {
+      dot.age++;
+      dot.life = max(0.32, dot.life * 0.9985);
+      dot.pulse = max(0, (dot.pulse || 0) * 0.86);
+      const wobble = sin(frameCount * 0.035 + dot.seed) * 10;
+      const pulseSize = dot.pulse * 46;
+      const alpha = 145 * dot.life * (1 - this.threePromptProgress * 0.35);
+      stroke(35, 112, 255, alpha);
+      strokeWeight(1.4);
+      ellipse(dot.x, dot.y, dot.radius + wobble + pulseSize, (dot.radius + wobble + pulseSize) * 0.72);
+      stroke(35, 112, 255, alpha * 0.52);
+      ellipse(dot.x, dot.y, dot.radius * 1.45 + wobble + pulseSize * 0.55, (dot.radius * 1.45 + wobble + pulseSize * 0.55) * 0.72);
+      noStroke();
+      fill(35, 112, 255, alpha * 0.85);
+      circle(dot.x, dot.y, 12 + pulseSize * 0.18 + (sin(frameCount * 0.08 + dot.seed) + 1) * 4);
+      noFill();
+    }
+  }
+
+  drawThreeFingerPrompt() {
+    if (this.threePromptProgress <= 0.01) return;
+    this.drawStagePromptMask(this.threeTextMask, color(255, 214, 26), this.threePromptProgress * (1 - this.fourPromptProgress));
+    this.drawStagePromptMask(this.fourTextMask, color(255), this.fourPromptProgress);
+  }
+
+  drawStagePromptMask(mask, dotColor, alphaScale) {
+    if (alphaScale <= 0.01) return;
+    mask.loadPixels();
+    noStroke();
+    for (let x = 0; x < width; x += 4) {
+      for (let y = 0; y < height; y += 4) {
+        const index = 4 * (x + y * width);
+        if (mask.pixels[index] <= 100) continue;
+        const flowA = noise(x * 0.006, y * 0.006, frameCount * 0.002);
+        const flowB = noise(x * 0.014 + 200, y * 0.014 - 100, frameCount * 0.001);
+        const wave = sin(flowA * 75 + flowB * 25 + x * 0.018 + y * 0.006 + frameCount * 0.025);
+        if (wave <= -0.24) continue;
+        fill(red(dotColor), green(dotColor), blue(dotColor), 255 * alphaScale);
+        circle(x, y, 3.8);
+      }
+    }
   }
 
   drawSampleGrid(visible, point) {
     if (!visible) return;
-    const col = isFinitePoint(point) ? floor(constrain(map(point.x, 0, width, 0, 4), 0, 3.999)) : -1;
-    const row = isFinitePoint(point) ? floor(constrain(map(point.y, 0, height, 0, 4), 0, 3.999)) : -1;
+    const cellW = width / sampleGridCols;
+    const cellH = height / sampleGridRows;
+    const col = isFinitePoint(point) ? floor(constrain(map(point.x, 0, width, 0, sampleGridCols), 0, sampleGridCols - 0.001)) : -1;
+    const row = isFinitePoint(point) ? floor(constrain(map(point.y, 0, height, 0, sampleGridRows), 0, sampleGridRows - 0.001)) : -1;
     const loopingCell = getLoopingSampleGridCell();
 
     if (col >= 0 && row >= 0) {
       noStroke();
       fill(255, 34, 28, 88 + this.globalAmp * 72);
       const pad = 12 + this.globalAmp * 8;
-      rect(col * width * 0.25 + pad, row * height * 0.25 + pad, width * 0.25 - pad * 2, height * 0.25 - pad * 2);
+      rect(col * cellW + pad, row * cellH + pad, cellW - pad * 2, cellH - pad * 2);
     }
 
     if (loopingCell !== null) {
@@ -204,21 +479,23 @@ class VisualSystem {
     noFill();
     stroke(255, 255, 255, 48 + this.globalAmp * 70);
     strokeWeight(1.2 + this.globalAmp * 2.4);
-    for (let i = 1; i < 4; i++) {
-      const x = width * i * 0.25;
-      const y = height * i * 0.25;
+    for (let i = 1; i < sampleGridCols; i++) {
+      const x = width * i / sampleGridCols;
       this.drawWavyDivider(x, true, i);
+    }
+    for (let i = 1; i < sampleGridRows; i++) {
+      const y = height * i / sampleGridRows;
       this.drawWavyDivider(y, false, i + 8);
     }
   }
 
   drawFluidSampleCell(cell, fillColor, alpha) {
-    const col = cell % 4;
-    const row = floor(cell / 4) % 4;
-    const x = col * width * 0.25;
-    const y = row * height * 0.25;
-    const w = width * 0.25;
-    const h = height * 0.25;
+    const col = cell % sampleGridCols;
+    const row = floor(cell / sampleGridCols) % sampleGridRows;
+    const w = width / sampleGridCols;
+    const h = height / sampleGridRows;
+    const x = col * w;
+    const y = row * h;
     const pad = 18 + this.globalAmp * 10;
     const left = x + pad;
     const right = x + w - pad;
@@ -319,15 +596,20 @@ class VisualSystem {
 
   createEventParticle(event) {
     this.pulseAudioObject(event);
+    if (event.loopPlayback && event.soundEngine === "motion" && event.loopMemoryId) {
+      const dot = this.percussionDots.find((item) => item.id === event.loopMemoryId);
+      if (dot) dot.pulse = 1;
+    }
+    if (event.loopPlayback) return;
     const key = event.soundEngine || event.key || activeProcessKey || "loopCreator";
     const c = processColors[key] || processColors.loopCreator;
-    const x = Number.isFinite(event.visualX) ? event.visualX : random(width * 0.22, width * 0.78);
-    const y = Number.isFinite(event.visualY) ? event.visualY : random(height * 0.22, height * 0.72);
+    const x = Number.isFinite(event.visualX) ? event.visualX : width * 0.5;
+    const y = Number.isFinite(event.visualY) ? event.visualY : height * 0.5;
     particles.push({
       x,
       y,
-      vx: random(-0.5, 0.5),
-      vy: random(-0.8, 0.8),
+      vx: 0,
+      vy: 0,
       size: event.type === "click" || event.type === "clickPattern" ? 4 : 7,
       life: 46,
       color: c,
@@ -354,6 +636,7 @@ class VisualSystem {
 
   createSavedBlock(memory) {
     const c = processColors[memory.key];
+    this.addPercussionDots(memory);
     const originX = 78 + savedBlocks.length * 124;
     const originY = height - 112;
     const cells = [];
@@ -403,6 +686,24 @@ class VisualSystem {
         if (isFinitePoint(point)) this.drawEchoDot(point, 11, i * 0.85, 1);
       }
     }
+  }
+
+  drawTrackingStatus(sortedHands, activeFinger) {
+    const cameraReady = video && video.elt && video.elt.readyState >= 2;
+    const message = handPoseError
+      ? "tracking error: " + handPoseError
+      : !cameraReady
+        ? "allow camera / camera starting"
+      : handPoseLoading
+        ? "tracking model loading"
+        : handPoseStarted
+          ? (sortedHands.length ? sortedHands.length + " hand detected" : "show your hand")
+          : "tracking starting";
+    const active = activeFinger ? activeFinger.openFingers.join(" + ") : "";
+    noStroke();
+    fill(this.transitionProgress > 0.5 ? 255 : 0, 150);
+    textSize(13);
+    text(message + (active ? " / " + active : ""), 26, height - 34);
   }
 
   drawEchoDot(point, size, phase, strength) {
@@ -502,23 +803,23 @@ class ReactiveGestureVisual {
     this.y = point.y;
     this.targetX = point.x;
     this.targetY = point.y;
-    this.seed = random(1000);
-    this.clock = random(100);
+    this.seed = gestureVisualSeed(key, point, anchor);
+    this.clock = this.seed % 100;
     this.hold = 0.08;
-    this.life = anchor === "gesture" ? 160 : 96;
+    this.life = anchor === "gesture" ? 160 : anchor.startsWith("loop-") ? 220 : 96;
     this.maxLife = this.life;
     this.radius = this.baseRadius();
     this.aspect = key === "space" ? 0.58 : key === "motion" ? 0.74 : 0.92;
-    this.spin = random([-1, 1]) * random(0.002, 0.007);
+    this.spin = (((this.seed % 200) - 100) / 100) * 0.004;
   }
 
   baseRadius() {
-    if (this.key === "loopCreator") return random(86, 124);
-    if (this.key === "motion") return random(44, 72);
-    if (this.key === "texture") return random(30, 54);
-    if (this.key === "space") return random(72, 112);
-    if (this.key === "decay") return random(58, 92);
-    return random(48, 84);
+    if (this.key === "loopCreator") return 104;
+    if (this.key === "motion") return 58;
+    if (this.key === "texture") return 42;
+    if (this.key === "space") return 92;
+    if (this.key === "decay") return 74;
+    return 62;
   }
 
   updateTarget(point) {
@@ -605,4 +906,13 @@ class ReactiveGestureVisual {
     if (this.key === "decay") return (analysis.bass || 0) * 0.35 + (analysis.mid || 0) * 0.65;
     return analysis.amp || 0;
   }
+}
+
+function gestureVisualSeed(key, point, anchor) {
+  const text = key + ":" + anchor + ":" + round(point.x) + ":" + round(point.y);
+  let hash = 0;
+  for (let i = 0; i < text.length; i++) {
+    hash = (hash * 31 + text.charCodeAt(i)) % 10000;
+  }
+  return hash;
 }

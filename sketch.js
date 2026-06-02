@@ -1,6 +1,11 @@
 let video;
 let handPose;
 let hands = [];
+let handPoseStarted = false;
+let ml5ScriptRequested = false;
+let handPoseLoading = false;
+let handPoseError = "";
+let handPoseFramePending = false;
 let performerCenterX = null;
 let audioReady = false;
 let audioStarting = false;
@@ -12,11 +17,16 @@ let lastPerformingProcessKey = null;
 let leftThumbWasOpen = false;
 let leftPinchWasActive = false;
 let leftOpenPalmWasActive = false;
+let rightPinchActive = false;
 let lastSampleGridCell = null;
 let lastSampleGridAt = 0;
 let selectedSampleGridCell = null;
 let sampleModeWasActive = false;
 let saveCooldownUntil = 0;
+let stableActiveFinger = null;
+let pendingFingerCount = null;
+let pendingFingerFrames = 0;
+let missingFingerFrames = 0;
 
 let audioEngine;
 let loopManager;
@@ -26,6 +36,7 @@ let drawErrorMessage = "";
 let audioModulationEnabled = true;
 let pendingAudioEvents = [];
 let pendingSampleLoopEvent = null;
+let lastLiveDroneAt = 0;
 
 const canvasW = 1048;
 const canvasH = 756;
@@ -35,6 +46,8 @@ const saveCooldown = 1400;
 const parameterLoopLength = 5000;
 const parameterRecordInterval = 70;
 const loopLifetimeCycles = 5;
+const fingerModeSwitchFrames = 3;
+const fingerModeMissingFrames = 3;
 
 const processOrder = ["loopCreator", "motion", "texture", "space", "decay"];
 
@@ -65,6 +78,13 @@ const processColors = {
 const fingerTips = { thumb: 4, index: 8, middle: 12, ring: 16, pinky: 20 };
 const fingerJoints = { thumb: 2, index: 6, middle: 10, ring: 14, pinky: 18 };
 const fingerOrder = ["thumb", "index", "middle", "ring", "pinky"];
+const requiredFingerModes = [
+  ["index"],
+  ["thumb", "index"],
+  ["thumb", "index", "middle"],
+  ["thumb", "index", "middle", "ring"],
+  ["thumb", "index", "middle", "ring", "pinky"],
+];
 const leftParamKeys = ["density", "variation", "depth", "chance"];
 
 const connections = [
@@ -91,18 +111,25 @@ const chordBank = [
 ];
 const rhythmSubdivisions = [1, 2, 4, 8, 16];
 const samplePaths = [
-  "sounds/Bjork-Interview-1996.mp3",
-  "sounds/Cyberstress.mp3",
   "sounds/Female-Evil-Laugh.wav",
-  "sounds/Jodie-Foster-Gay-Silence.mp3",
   "sounds/Lakker-Tuk-tuk.mp3",
   "sounds/My-Girl-is-Crying.mp3",
   "sounds/Old-Ladies-Pets.wav",
   "sounds/SR006F.wav",
   "sounds/Scratching-Strings.wav",
   "sounds/Thats-My-Laugh.wav",
-  "sounds/Weirdcore-Analysis.mp3",
+  "sounds/text/Balkan Central Europe.mp3",
+  "sounds/text/Bjork-Interview-1996.mp3",
+  "sounds/text/Cyberstress.mp3",
+  "sounds/text/Hello My Name Is Bjork.mp3",
+  "sounds/text/Jodie-Foster-Gay-Silence.mp3",
+  "sounds/text/Kero Kero Bonito - I'd Rather Sleep.mp3",
+  "sounds/text/Make Me Moo - The Residents.mp3",
+  "sounds/text/Weirdcore-Analysis.mp3",
+  "sounds/text/Yung Lean - Hurt.mp3",
 ];
+const sampleGridCols = 4;
+const sampleGridRows = 4;
 let selectedNote = "C3";
 let selectedFilter = 0.5;
 let selectedSampleIndex = 0;
@@ -136,10 +163,6 @@ let audioAnalysis = {
 };
 
 function preload() {
-  handPose = ml5.handPose({
-    flipped: true,
-    maxHands: 4,
-  });
 }
 
 function setup() {
@@ -151,11 +174,15 @@ function setup() {
   try {
     video = createCapture(VIDEO);
     video.size(canvasW, canvasH);
+    video.elt.setAttribute("playsinline", "true");
+    video.elt.muted = true;
+    video.elt.play().catch((error) => {
+      systemMessage = "allow camera / camera starting";
+      console.error(error);
+    });
     video.hide();
 
-    handPose.detectStart(video, (results) => {
-      hands = results.slice(0, 4);
-    });
+    startHandTrackingWhenReady();
   } catch (error) {
     systemMessage = "camera could not start: " + error.message;
     console.error(error);
@@ -174,12 +201,78 @@ function setup() {
 
 function draw() {
   try {
+    startHandTrackingWhenReady();
     drawFrame();
   } catch (error) {
     drawErrorMessage = error.message;
     console.error(error);
     drawFallbackFrame();
   }
+}
+
+function startHandTrackingWhenReady() {
+  if (handPoseStarted || !video) return;
+  if (typeof Hands === "undefined") {
+    systemMessage = "hand tracking library is loading";
+    return;
+  }
+  if (!handPose && !handPoseLoading) {
+    handPoseLoading = true;
+    handPose = new Hands({
+      locateFile: (file) => "libraries/mediapipe/hands/" + file,
+    });
+    handPose.setOptions({
+      maxNumHands: 2,
+      modelComplexity: 0,
+      minDetectionConfidence: 0.5,
+      minTrackingConfidence: 0.45,
+      selfieMode: true,
+    });
+    handPose.onResults(handleMediaPipeHands);
+    handPoseLoading = false;
+  }
+  if (!handPose || !video.elt) {
+    systemMessage = handPoseLoading ? "hand tracking model is loading" : "hand tracking library is loading";
+    return;
+  }
+  handPoseStarted = true;
+  handPoseError = "";
+  systemMessage = "";
+  requestAnimationFrame(detectHandsFrame);
+}
+
+async function detectHandsFrame() {
+  if (!handPoseStarted || !handPose || !video || !video.elt) return;
+  if (!handPoseFramePending && video.elt.readyState >= 2) {
+    handPoseFramePending = true;
+    try {
+      await handPose.send({ image: video.elt });
+      handPoseError = "";
+    } catch (error) {
+      handPoseError = error.message || "frame failed";
+      systemMessage = "hand tracking frame skipped";
+      console.error(error);
+    }
+    handPoseFramePending = false;
+  }
+  requestAnimationFrame(detectHandsFrame);
+}
+
+function handleMediaPipeHands(results) {
+  const landmarks = results.multiHandLandmarks || [];
+  const handedness = results.multiHandedness || [];
+  hands = landmarks.slice(0, 2).map((points, index) => {
+    const classification = handedness[index] || null;
+    return {
+      handedness: classification ? classification.label : null,
+      confidence: classification ? classification.score : 1,
+      keypoints: points.map((point) => ({
+        x: point.x * width,
+        y: point.y * height,
+        z: point.z || 0,
+      })),
+    };
+  });
 }
 
 function drawFrame() {
@@ -191,14 +284,15 @@ function drawFrame() {
   const gesturePoint = getGestureSpatialPoint(leftHand, activeFinger, rightHand);
   audioAnalysis = readAudioAnalysis();
 
-  if (!audioReady && !audioStarting && activeFinger && millis() - lastAudioStartAttempt > 2400) {
+  if (!audioReady && !audioStarting && activeFinger && millis() - lastAudioStartAttempt > 250) {
     startAudioFromHands();
   }
 
   const leftOpenPalmActive = handleLeftOpenPalmStop(leftHand);
 
   activeProcessKey = activeFinger ? activeFinger.processKey : null;
-  if (activeProcessKey && !GestureDetector.isThumbIndexPinch(rightHand)) {
+  rightPinchActive = GestureDetector.isThumbIndexPinch(rightHand);
+  if (activeProcessKey && !rightPinchActive) {
     lastPerformingProcessKey = activeProcessKey;
   }
   if (activeProcessKey !== previousProcessKey) {
@@ -219,8 +313,14 @@ function drawFrame() {
   const loopingSampleCell = getLoopingSampleGridCell();
   const sampleGridVisible = (activeProcessKey === "decay" && activeFinger && activeFinger.count === 5) || loopingSampleCell !== null;
   const sampleGridPoint = getSampleGridPoint(rightHand, activeFinger);
-  visualSystem.update(activeProcessKey, layers, audioAnalysis, gesturePoint);
+  visualSystem.update(activeProcessKey, layers, audioAnalysis, gesturePoint, activeFinger);
   visualSystem.drawBackground(sampleGridVisible);
+  if (!activeProcessKey || activeProcessKey === "loopCreator" || activeProcessKey === "motion") {
+    visualSystem.drawAudioReactiveLayer(audioAnalysis);
+    visualSystem.drawHands(sorted, activeFinger, leftHand);
+    visualSystem.drawTrackingStatus(sorted, activeFinger);
+    return;
+  }
   visualSystem.drawSampleGrid(sampleGridVisible, sampleGridPoint);
   visualSystem.drawAudioReactiveLayer(audioAnalysis);
   visualSystem.drawParticles();
@@ -253,11 +353,21 @@ function updateAudioSafely(gesturePoint) {
     audioEngine.updateSampleLoops(Tone.now());
     audioEngine.updateFromLayers(layers);
     audioEngine.setSpatialPosition(gesturePoint);
+    updateLiveOneFingerDrone();
   } catch (error) {
     audioModulationEnabled = false;
     systemMessage = "audio running without continuous modulation";
     console.error(error);
   }
+}
+
+function updateLiveOneFingerDrone() {
+  if (activeProcessKey !== "loopCreator" || millis() - lastLiveDroneAt < 620) return;
+  const rightHand = HandTracker.getHandBySide(HandTracker.getSinglePerformerHands(hands), "Right", 1) || HandTracker.getSinglePerformerHands(hands)[0];
+  const event = createGestureEvent("loopCreator", rightHand, null);
+  event.velocity = constrain(map(selectedFilter, 0, 1, 0.28, 0.76), 0.22, 0.82);
+  audioEngine.playGestureEvent(event, Tone.now(), 0.82);
+  lastLiveDroneAt = millis();
 }
 
 function drawFallbackFrame() {
@@ -479,10 +589,6 @@ function updateControlAxes(leftHand, rightHand, activeFinger) {
 }
 
 function getAxisControlPoint(key, leftHand, rightHand, activeFinger) {
-  if (key === "motion" || key === "texture") {
-    const leftIndex = getIndexPoint(leftHand);
-    if (leftIndex) return leftIndex;
-  }
   const rightIndex = getIndexPoint(rightHand);
   if (rightIndex) return rightIndex;
   if (activeFinger && isFinitePoint(activeFinger.point)) return activeFinger.point;
@@ -490,14 +596,14 @@ function getAxisControlPoint(key, leftHand, rightHand, activeFinger) {
 }
 
 function getSampleGridIndex(point) {
-  return getSampleGridCell(point) % samplePaths.length;
+  return constrain(getSampleGridCell(point), 0, samplePaths.length - 1);
 }
 
 function getSampleGridCell(point) {
   if (!isFinitePoint(point)) return 0;
-  const col = floor(constrain(map(point.x, 0, width, 0, 4), 0, 3.999));
-  const row = floor(constrain(map(point.y, 0, height, 0, 4), 0, 3.999));
-  return row * 4 + col;
+  const col = floor(constrain(map(point.x, 0, width, 0, sampleGridCols), 0, sampleGridCols - 0.001));
+  const row = floor(constrain(map(point.y, 0, height, 0, sampleGridRows), 0, sampleGridRows - 0.001));
+  return row * sampleGridCols + col;
 }
 
 function getSampleGridPoint(rightHand, activeFinger) {
@@ -518,7 +624,7 @@ function updateSampleGrid(rightHand, activeFinger) {
   if (!isFinitePoint(point)) return;
 
   const gridCell = getSampleGridCell(point);
-  const cell = gridCell % samplePaths.length;
+  const cell = constrain(gridCell, 0, samplePaths.length - 1);
   const shouldPlay = gridCell !== lastSampleGridCell;
 
   selectedSampleIndex = cell;
@@ -532,7 +638,20 @@ function updateSampleGrid(rightHand, activeFinger) {
 
 function triggerSampleGridCell(point, cell, repeatCount = 1, gridCell = getSampleGridCell(point)) {
   if (!audioReady && !audioStarting) startAudioFromHands();
-  const event = {
+  const event = createSampleEvent(point, cell, gridCell, repeatCount);
+
+  visualSystem.createEventParticle(event);
+  try {
+    playOrQueueGestureEvent(event, 1);
+  } catch (error) {
+    systemMessage = "sample event skipped";
+    console.error(error);
+  }
+  return event;
+}
+
+function createSampleEvent(point, cell, gridCell, repeatCount = 1) {
+  return {
     time: loopManager ? loopManager.step / loopManager.loopLength : (millis() % parameterLoopLength) / parameterLoopLength,
     type: "sample",
     note: selectedNote,
@@ -550,15 +669,6 @@ function triggerSampleGridCell(point, cell, repeatCount = 1, gridCell = getSampl
     gridCell,
     repeatCount,
   };
-
-  visualSystem.createEventParticle(event);
-  try {
-    playOrQueueGestureEvent(event, 1);
-  } catch (error) {
-    systemMessage = "sample event skipped";
-    console.error(error);
-  }
-  return event;
 }
 
 function getIndexPoint(hand) {
@@ -573,6 +683,7 @@ function getOpenFingerPoint(hand, key) {
 }
 
 function getGestureSpatialPoint(leftHand, activeFinger, rightHand) {
+  if (activeFinger && activeFinger.count === 1 && isFinitePoint(activeFinger.point)) return activeFinger.point;
   const rightIndex = getIndexPoint(rightHand);
   if (rightIndex) return rightIndex;
   if (activeFinger && isFinitePoint(activeFinger.point)) return activeFinger.point;
@@ -621,18 +732,18 @@ function stopAllAudio() {
 }
 
 function handlePinchTrigger(rightHand, leftHand) {
-  const pinchActive = GestureDetector.isThumbIndexPinch(rightHand);
+  const pinchActive = rightPinchActive;
   if (pinchActive && !leftPinchWasActive) {
-    const activeFinger = GestureDetector.getActiveRightGesture(rightHand);
+    const activeFinger = stableActiveFinger;
     const twoFingerMode = activeFinger && activeFinger.count === 2 || lastPerformingProcessKey === "motion";
     if (twoFingerMode && selectedSampleGridCell !== null && activeProcessKey === "decay") {
       toggleSelectedSampleLoop();
       leftPinchWasActive = pinchActive;
       return;
     }
-    const key = lastPerformingProcessKey || activeProcessKey;
+    const key = activeProcessKey || lastPerformingProcessKey;
     if (key === "decay") {
-      triggerSelectedSample(rightHand);
+      triggerSelectedSampleLoopMemory(rightHand);
     } else {
       triggerSelectedNote(rightHand, leftHand, key);
     }
@@ -643,7 +754,7 @@ function handlePinchTrigger(rightHand, leftHand) {
 function triggerSelectedNote(rightHand, leftHand, key = activeProcessKey) {
   if (!key || key === "decay") return;
   if (!audioReady && !audioStarting) startAudioFromHands();
-  const isBackgroundLoop = key === "loopCreator" || key === "motion";
+  const isBackgroundLoop = key === "loopCreator" || key === "motion" || key === "texture";
   const event = createGestureEvent(key, rightHand, leftHand);
   const shouldLoop = key !== "space";
 
@@ -687,9 +798,9 @@ function triggerSelectedNote(rightHand, leftHand, key = activeProcessKey) {
     savedBlocks = savedBlocks.filter((block) => block.id !== removed.id);
   }
   visualSystem.createSavedBlock(memory);
-  visualSystem.createEventParticle(event);
+  visualSystem.createEventParticle({ ...event, loopMemoryId: memory.id });
   try {
-    playOrQueueGestureEvent(event, 1);
+    playOrQueueGestureEvent(key === "motion" ? { ...event, probability: 1 } : event, 1);
   } catch (error) {
     systemMessage = "audio event skipped, loop memory stored";
     console.error(error);
@@ -704,7 +815,42 @@ function triggerSelectedSample(rightHand) {
   if (!audioReady && !audioStarting) startAudioFromHands();
 
   const eventGridCell = gridCell !== null ? gridCell : getSampleGridCell(point);
-  triggerSampleGridCell(point, eventGridCell % samplePaths.length, 1, eventGridCell);
+  triggerSampleGridCell(point, constrain(eventGridCell, 0, samplePaths.length - 1), 1, eventGridCell);
+}
+
+function triggerSelectedSampleLoopMemory(rightHand) {
+  if (activeProcessKey !== "decay") return;
+  const gridCell = selectedSampleGridCell !== null ? selectedSampleGridCell : lastSampleGridCell;
+  const indexPoint = getIndexPoint(rightHand);
+  const point = isFinitePoint(indexPoint) ? indexPoint : gridCell !== null ? getSampleGridCellCenter(gridCell) : null;
+  if (!isFinitePoint(point)) return;
+  if (!audioReady && !audioStarting) startAudioFromHands();
+
+  const eventGridCell = gridCell !== null ? gridCell : getSampleGridCell(point);
+  const event = createSampleEvent(point, constrain(eventGridCell, 0, samplePaths.length - 1), eventGridCell, 1);
+  const memory = {
+    id: millis() + "-decay",
+    key: "decay",
+    events: [event],
+    params: { ...layers.decay.params, depth: selectedFilter },
+    pattern: null,
+    savedAt: millis(),
+    cycleCount: 0,
+    maxCycles: loopLifetimeCycles,
+    lastCycleStep: 0,
+    fading: false,
+    background: false,
+  };
+
+  loopMemories.push(memory);
+  while (loopMemories.length > 8) {
+    const removableIndex = loopMemories.findIndex((item) => !item.background);
+    const removed = loopMemories.splice(removableIndex >= 0 ? removableIndex : 0, 1)[0];
+    savedBlocks = savedBlocks.filter((block) => block.id !== removed.id);
+  }
+  visualSystem.createSavedBlock(memory);
+  visualSystem.createEventParticle({ ...event, loopMemoryId: memory.id });
+  playOrQueueGestureEvent(event, 1);
 }
 
 function toggleSelectedSampleLoop() {
@@ -725,7 +871,7 @@ function toggleSelectedSampleLoop() {
     pan: getPanFromPoint(point),
     visualX: point.x,
     visualY: point.y,
-    sampleIndex: gridCell % samplePaths.length,
+    sampleIndex: constrain(gridCell, 0, samplePaths.length - 1),
     gridCell,
     repeatCount: 1,
   };
@@ -734,8 +880,8 @@ function toggleSelectedSampleLoop() {
 
 function getSampleGridCellCenter(cell) {
   return {
-    x: (cell % 4 + 0.5) * width * 0.25,
-    y: (floor(cell / 4) % 4 + 0.5) * height * 0.25,
+    x: (cell % sampleGridCols + 0.5) * width / sampleGridCols,
+    y: (floor(cell / sampleGridCols) % sampleGridRows + 0.5) * height / sampleGridRows,
   };
 }
 
@@ -746,7 +892,8 @@ function clearOtherProcessMemories(key) {
 }
 
 function createGestureEvent(engineKey, rightHand, leftHand) {
-  const spatialPoint = getAxisControlPoint(engineKey, leftHand, rightHand, null);
+  const pinchPoint = engineKey === "motion" ? getThumbIndexCenter(rightHand) : null;
+  const spatialPoint = pinchPoint || getAxisControlPoint(engineKey, leftHand, rightHand, null);
   const base = {
     time: loopManager ? loopManager.step / loopManager.loopLength : (millis() % parameterLoopLength) / parameterLoopLength,
     type: "gesture",
@@ -765,7 +912,7 @@ function createGestureEvent(engineKey, rightHand, leftHand) {
 
   if (engineKey === "loopCreator") {
     const chordIndex = floor(constrain(map(getScaleIndex(selectedNote), 0, fixedScale.length - 1, 0, chordBank.length), 0, chordBank.length - 0.001));
-    return { ...base, type: "chord", chord: chordBank[chordIndex], inversion: floor(random(0, 3)), velocitySpread: random(0.08, 0.32) };
+    return { ...base, type: "chord", chord: chordBank[chordIndex], inversion: 2, velocitySpread: 0.22 };
   }
 
   if (engineKey === "motion") {
@@ -784,14 +931,38 @@ function createGestureEvent(engineKey, rightHand, leftHand) {
   return { ...base, type: "lead", note: selectedNote, velocity: map(getHandCloseness(rightHand), 0, 1, 0.22, 0.92) };
 }
 
+function getThumbIndexCenter(hand) {
+  if (!HandTracker.isValidHand(hand)) return null;
+  const thumb = hand.keypoints[fingerTips.thumb];
+  const index = hand.keypoints[fingerTips.index];
+  if (!isFinitePoint(thumb) || !isFinitePoint(index)) return null;
+  return {
+    x: (thumb.x + index.x) * 0.5,
+    y: (thumb.y + index.y) * 0.5,
+  };
+}
+
 function createRegularPercussionEvents(source) {
   const events = [];
   const regularCount = source.subdivision;
   for (let i = 0; i < regularCount; i++) {
     events.push({ ...source, time: i / regularCount, probability: 1, random: false });
   }
-  for (let i = 0; i < source.randomHits; i++) {
-    events.push({ ...source, time: random(), probability: source.probability, random: true, velocity: source.velocity * random(0.45, 0.9) });
+  const inBetweenCount = source.randomHits;
+  const inBetweenLayers = max(1, ceil(inBetweenCount / regularCount));
+  for (let i = 0; i < inBetweenCount; i++) {
+    const slot = i % regularCount;
+    const layer = floor(i / regularCount);
+    const offset = (layer + 1) / (inBetweenLayers + 1);
+    const accent = 0.58 + 0.32 * (1 - i / max(1, inBetweenCount));
+    events.push({
+      ...source,
+      time: (slot + offset) / regularCount,
+      probability: source.probability,
+      random: false,
+      inBetween: true,
+      velocity: source.velocity * accent,
+    });
   }
   return events.sort((a, b) => a.time - b.time);
 }
@@ -800,7 +971,8 @@ function createClickPatternEvents(source) {
   const count = floor(map(getNoteHeightValue(), 0, 1, 2, 12));
   const events = [];
   for (let i = 0; i < count; i++) {
-    events.push({ ...source, time: i / count, probability: random(0.55, 0.95), velocity: source.velocity * random(0.45, 0.95) });
+    const accent = i % 3 === 0 ? 0.82 : 0.48 + (i % 4) * 0.08;
+    events.push({ ...source, time: i / count, probability: 1, velocity: source.velocity * accent });
   }
   return events;
 }
@@ -1020,10 +1192,15 @@ class HandTracker {
   }
 
   static getPerformanceHands(sortedHands) {
+    if (sortedHands.length === 1) {
+      const rightHand = sortedHands[0];
+      const activeFinger = GestureDetector.getStableActiveRightGesture(rightHand);
+      return { leftHand: null, rightHand, activeFinger };
+    }
     const labeledRight = HandTracker.getHandBySide(sortedHands, "Right", 1);
     const labeledLeft = HandTracker.getHandBySide(sortedHands, "Left", 0);
     const rightHand = labeledRight || sortedHands[1] || sortedHands[0] || null;
-    const activeFinger = GestureDetector.getActiveRightGesture(rightHand);
+    const activeFinger = GestureDetector.getStableActiveRightGesture(rightHand);
     let leftHand = labeledLeft && labeledLeft !== rightHand ? labeledLeft : null;
     if (!leftHand) leftHand = sortedHands.find((hand) => hand !== rightHand) || null;
     return { leftHand, rightHand, activeFinger };
@@ -1046,15 +1223,53 @@ class HandTracker {
 }
 
 class GestureDetector {
+  static getStableActiveRightGesture(hand) {
+    const rawGesture = GestureDetector.getActiveRightGesture(hand);
+    if (!rawGesture) {
+      missingFingerFrames++;
+      pendingFingerCount = null;
+      pendingFingerFrames = 0;
+      if (missingFingerFrames >= fingerModeMissingFrames) stableActiveFinger = null;
+      return stableActiveFinger;
+    }
+
+    missingFingerFrames = 0;
+    if (!stableActiveFinger) {
+      stableActiveFinger = rawGesture;
+      pendingFingerCount = null;
+      pendingFingerFrames = 0;
+      return stableActiveFinger;
+    }
+
+    if (rawGesture.count === stableActiveFinger.count) {
+      stableActiveFinger = rawGesture;
+      pendingFingerCount = null;
+      pendingFingerFrames = 0;
+      return stableActiveFinger;
+    }
+
+    if (pendingFingerCount === rawGesture.count) {
+      pendingFingerFrames++;
+    } else {
+      pendingFingerCount = rawGesture.count;
+      pendingFingerFrames = 1;
+    }
+
+    if (pendingFingerFrames >= fingerModeSwitchFrames) {
+      stableActiveFinger = rawGesture;
+      pendingFingerCount = null;
+      pendingFingerFrames = 0;
+    }
+
+    return stableActiveFinger;
+  }
+
   static getActiveRightGesture(hand) {
     if (!HandTracker.isValidHand(hand)) return null;
     const openness = GestureDetector.getFingerOpenness(hand);
-    const openFingers = [];
-    for (const key of fingerOrder) {
-      if (openness[key] > 0.52) openFingers.push(key);
-    }
-    const count = constrain(openFingers.length, 0, 5);
-    if (count === 0) return null;
+    const openFingers = GestureDetector.getRequiredOpenFingers(openness);
+    if (!openFingers) return null;
+    const count = openFingers.length;
 
     let x = 0;
     let y = 0;
@@ -1071,7 +1286,32 @@ class GestureDetector {
       openFingers,
       processKey: processOrder[count - 1],
       point: { x: x / openFingers.length, y: y / openFingers.length },
+      points: openFingers.map((key) => ({ key, point: hand.keypoints[fingerTips[key]] })),
     };
+  }
+
+  static getRequiredOpenFingers(openness) {
+    const openThreshold = 0.52;
+    const closedThreshold = 0.62;
+    const modeChecks = [
+      ["index"],
+      ["thumb", "index"],
+      ["thumb", "index", "middle"],
+      ["thumb", "index", "middle", "ring"],
+      ["thumb", "index", "middle", "ring", "pinky"],
+    ];
+
+    for (let i = modeChecks.length - 1; i >= 0; i--) {
+      const required = modeChecks[i];
+      let matches = true;
+      for (const key of fingerOrder) {
+        const shouldBeOpen = required.includes(key);
+        if (shouldBeOpen && openness[key] < openThreshold) matches = false;
+        if (!shouldBeOpen && openness[key] > closedThreshold) matches = false;
+      }
+      if (matches) return requiredFingerModes[i].slice();
+    }
+    return null;
   }
 
   static getFingerOpenness(hand) {
@@ -1092,7 +1332,31 @@ class GestureDetector {
     const tip = hand.keypoints[fingerTips[key]];
     const joint = hand.keypoints[fingerJoints[key]];
     if (!isFinitePoint(wrist) || !isFinitePoint(tip) || !isFinitePoint(joint)) return 0;
-    return constrain(map(dist(tip.x, tip.y, wrist.x, wrist.y) - dist(joint.x, joint.y, wrist.x, wrist.y), -10, 55, 0, 1), 0, 1);
+    const handScale = GestureDetector.getHandScale(hand);
+    const extension = dist(tip.x, tip.y, wrist.x, wrist.y) - dist(joint.x, joint.y, wrist.x, wrist.y);
+    const verticalLift = joint.y - tip.y;
+
+    if (key === "thumb") {
+      const indexBase = hand.keypoints[5];
+      const pinkyBase = hand.keypoints[17];
+      if (!isFinitePoint(indexBase) || !isFinitePoint(pinkyBase)) return 0;
+      const palmCenter = { x: (wrist.x + indexBase.x + pinkyBase.x) / 3, y: (wrist.y + indexBase.y + pinkyBase.y) / 3 };
+      const thumbSpread = dist(tip.x, tip.y, palmCenter.x, palmCenter.y);
+      return constrain(map(thumbSpread / handScale, 0.34, 0.74, 0, 1), 0, 1);
+    }
+
+    const distanceScore = constrain(map(extension / handScale, 0.02, 0.24, 0, 1), 0, 1);
+    const liftScore = constrain(map(verticalLift / handScale, -0.04, 0.18, 0, 1), 0, 1);
+    return constrain(distanceScore * 0.72 + liftScore * 0.28, 0, 1);
+  }
+
+  static getHandScale(hand) {
+    if (!HandTracker.isValidHand(hand)) return 120;
+    const wrist = hand.keypoints[0];
+    const middleBase = hand.keypoints[9];
+    const pinkyBase = hand.keypoints[17];
+    if (!isFinitePoint(wrist) || !isFinitePoint(middleBase) || !isFinitePoint(pinkyBase)) return 120;
+    return max(60, dist(wrist.x, wrist.y, middleBase.x, middleBase.y) + dist(middleBase.x, middleBase.y, pinkyBase.x, pinkyBase.y));
   }
 
   static isThumbIndexPinch(hand) {

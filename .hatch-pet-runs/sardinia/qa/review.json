@@ -1,0 +1,990 @@
+{
+  "ok": true,
+  "frames_root": "/Users/carolinevrablik/Desktop/Studies/2 Semester/2Sem, Critical Coding/Ikeda-Sampler/.hatch-pet-runs/sardinia/frames",
+  "errors": [],
+  "warnings": [
+    "idle used extraction method stable-slots; confirm motion playback remains stable and unclipped",
+    "running-right used extraction method stable-slots; confirm motion playback remains stable and unclipped",
+    "running-left used extraction method stable-slots; confirm motion playback remains stable and unclipped",
+    "waving used extraction method stable-slots; confirm motion playback remains stable and unclipped",
+    "jumping used extraction method stable-slots; confirm motion playback remains stable and unclipped",
+    "failed used extraction method stable-slots; confirm motion playback remains stable and unclipped",
+    "waiting used extraction method stable-slots; confirm motion playback remains stable and unclipped",
+    "running used extraction method stable-slots; confirm motion playback remains stable and unclipped",
+    "review used extraction method stable-slots; confirm motion playback remains stable and unclipped"
+  ],
+  "rows": [
+    {
+      "state": "idle",
+      "expected_frames": 6,
+      "actual_frames": 6,
+      "extraction_method": "stable-slots",
+      "ok": true,
+      "errors": [],
+      "warnings": [
+        "idle used extraction method stable-slots; confirm motion playback remains stable and unclipped"
+      ],
+      "frames": [
+        {
+          "index": 0,
+          "file": "/Users/carolinevrablik/Desktop/Studies/2 Semester/2Sem, Critical Coding/Ikeda-Sampler/.hatch-pet-runs/sardinia/frames/idle/00.png",
+          "width": 192,
+          "height": 208,
+          "nontransparent_pixels": 13590,
+          "bbox": [
+            5,
+            40,
+            187,
+            168
+          ],
+          "edge_pixels": 0,
+          "chroma_adjacent_pixels": 119
+        },
+        {
+          "index": 1,
+          "file": "/Users/carolinevrablik/Desktop/Studies/2 Semester/2Sem, Critical Coding/Ikeda-Sampler/.hatch-pet-runs/sardinia/frames/idle/01.png",
+          "width": 192,
+          "height": 208,
+          "nontransparent_pixels": 13187,
+          "bbox": [
+            6,
+            40,
+            185,
+            168
+          ],
+          "edge_pixels": 0,
+          "chroma_adjacent_pixels": 109
+        },
+        {
+          "index": 2,
+          "file": "/Users/carolinevrablik/Desktop/Studies/2 Semester/2Sem, Critical Coding/Ikeda-Sampler/.hatch-pet-runs/sardinia/frames/idle/02.png",
+          "width": 192,
+          "height": 208,
+          "nontransparent_pixels": 12842,
+          "bbox": [
+            8,
+            40,
+            184,
+            168
+          ],
+          "edge_pixels": 0,
+          "chroma_adjacent_pixels": 102
+        },
+        {
+          "index": 3,
+          "file": "/Users/carolinevrablik/Desktop/Studies/2 Semester/2Sem, Critical Coding/Ikeda-Sampler/.hatch-pet-runs/sardinia/frames/idle/03.png",
+          "width": 192,
+          "height": 208,
+          "nontransparent_pixels": 12840,
+          "bbox": [
+            8,
+            40,
+            184,
+            168
+          ],
+          "edge_pixels": 0,
+          "chroma_adjacent_pixels": 112
+        },
+        {
+          "index": 4,
+          "file": "/Users/carolinevrablik/Desktop/Studies/2 Semester/2Sem, Critical Coding/Ikeda-Sampler/.hatch-pet-runs/sardinia/frames/idle/04.png",
+          "width": 192,
+          "height": 208,
+          "nontransparent_pixels": 12944,
+          "bbox": [
+            8,
+            40,
+            184,
+            168
+          ],
+          "edge_pixels": 0,
+          "chroma_adjacent_pixels": 110
+        },
+        {
+          "index": 5,
+          "file": "/Users/carolinevrablik/Desktop/Studies/2 Semester/2Sem, Critical Coding/Ikeda-Sampler/.hatch-pet-runs/sardinia/frames/idle/05.png",
+          "width": 192,
+          "height": 208,
+          "nontransparent_pixels": 12406,
+          "bbox": [
+            11,
+            40,
+            181,
+            168
+          ],
+          "edge_pixels": 0,
+          "chroma_adjacent_pixels": 117
+        }
+      ]
+    },
+    {
+      "state": "running-right",
+      "expected_frames": 8,
+      "actual_frames": 8,
+      "extraction_method": "stable-slots",
+      "ok": true,
+      "errors": [],
+      "warnings": [
+        "running-right used extraction method stable-slots; confirm motion playback remains stable and unclipped"
+      ],
+      "frames": [
+        {
+          "index": 0,
+          "file": "/Users/carolinevrablik/Desktop/Studies/2 Semester/2Sem, Critical Coding/Ikeda-Sampler/.hatch-pet-runs/sardinia/frames/running-right/00.png",
+          "width": 192,
+          "height": 208,
+          "nontransparent_pixels": 13403,
+          "bbox": [
+            6,
+            39,
+            186,
+            169
+          ],
+          "edge_pixels": 0,
+          "chroma_adjacent_pixels": 169
+        },
+        {
+          "index": 1,
+          "file": "/Users/carolinevrablik/Desktop/Studies/2 Semester/2Sem, Critical Coding/Ikeda-Sampler/.hatch-pet-runs/sardinia/frames/running-right/01.png",
+          "width": 192,
+          "height": 208,
+          "nontransparent_pixels": 12134,
+          "bbox": [
+            15,
+            41,
+            177,
+            169
+          ],
+          "edge_pixels": 0,
+          "chroma_adjacent_pixels": 137
+        },
+        {
+          "index": 2,
+          "file": "/Users/carolinevrablik/Desktop/Studies/2 Semester/2Sem, Critical Coding/Ikeda-Sampler/.hatch-pet-runs/sardinia/frames/running-right/02.png",
+          "width": 192,
+          "height": 208,
+          "nontransparent_pixels": 12970,
+          "bbox": [
+            8,
+            38,
+            184,
+            167
+          ],
+          "edge_pixels": 0,
+          "chroma_adjacent_pixels": 180
+        },
+        {
+          "index": 3,
+          "file": "/Users/carolinevrablik/Desktop/Studies/2 Semester/2Sem, Critical Coding/Ikeda-Sampler/.hatch-pet-runs/sardinia/frames/running-right/03.png",
+          "width": 192,
+          "height": 208,
+          "nontransparent_pixels": 12714,
+          "bbox": [
+            9,
+            41,
+            182,
+            169
+          ],
+          "edge_pixels": 0,
+          "chroma_adjacent_pixels": 168
+        },
+        {
+          "index": 4,
+          "file": "/Users/carolinevrablik/Desktop/Studies/2 Semester/2Sem, Critical Coding/Ikeda-Sampler/.hatch-pet-runs/sardinia/frames/running-right/04.png",
+          "width": 192,
+          "height": 208,
+          "nontransparent_pixels": 12484,
+          "bbox": [
+            8,
+            42,
+            184,
+            170
+          ],
+          "edge_pixels": 0,
+          "chroma_adjacent_pixels": 175
+        },
+        {
+          "index": 5,
+          "file": "/Users/carolinevrablik/Desktop/Studies/2 Semester/2Sem, Critical Coding/Ikeda-Sampler/.hatch-pet-runs/sardinia/frames/running-right/05.png",
+          "width": 192,
+          "height": 208,
+          "nontransparent_pixels": 12561,
+          "bbox": [
+            5,
+            43,
+            187,
+            169
+          ],
+          "edge_pixels": 0,
+          "chroma_adjacent_pixels": 165
+        },
+        {
+          "index": 6,
+          "file": "/Users/carolinevrablik/Desktop/Studies/2 Semester/2Sem, Critical Coding/Ikeda-Sampler/.hatch-pet-runs/sardinia/frames/running-right/06.png",
+          "width": 192,
+          "height": 208,
+          "nontransparent_pixels": 11739,
+          "bbox": [
+            10,
+            43,
+            182,
+            168
+          ],
+          "edge_pixels": 0,
+          "chroma_adjacent_pixels": 168
+        },
+        {
+          "index": 7,
+          "file": "/Users/carolinevrablik/Desktop/Studies/2 Semester/2Sem, Critical Coding/Ikeda-Sampler/.hatch-pet-runs/sardinia/frames/running-right/07.png",
+          "width": 192,
+          "height": 208,
+          "nontransparent_pixels": 12473,
+          "bbox": [
+            10,
+            44,
+            182,
+            170
+          ],
+          "edge_pixels": 0,
+          "chroma_adjacent_pixels": 174
+        }
+      ]
+    },
+    {
+      "state": "running-left",
+      "expected_frames": 8,
+      "actual_frames": 8,
+      "extraction_method": "stable-slots",
+      "ok": true,
+      "errors": [],
+      "warnings": [
+        "running-left used extraction method stable-slots; confirm motion playback remains stable and unclipped"
+      ],
+      "frames": [
+        {
+          "index": 0,
+          "file": "/Users/carolinevrablik/Desktop/Studies/2 Semester/2Sem, Critical Coding/Ikeda-Sampler/.hatch-pet-runs/sardinia/frames/running-left/00.png",
+          "width": 192,
+          "height": 208,
+          "nontransparent_pixels": 12509,
+          "bbox": [
+            12,
+            40,
+            177,
+            167
+          ],
+          "edge_pixels": 0,
+          "chroma_adjacent_pixels": 167
+        },
+        {
+          "index": 1,
+          "file": "/Users/carolinevrablik/Desktop/Studies/2 Semester/2Sem, Critical Coding/Ikeda-Sampler/.hatch-pet-runs/sardinia/frames/running-left/01.png",
+          "width": 192,
+          "height": 208,
+          "nontransparent_pixels": 11610,
+          "bbox": [
+            17,
+            42,
+            175,
+            167
+          ],
+          "edge_pixels": 0,
+          "chroma_adjacent_pixels": 160
+        },
+        {
+          "index": 2,
+          "file": "/Users/carolinevrablik/Desktop/Studies/2 Semester/2Sem, Critical Coding/Ikeda-Sampler/.hatch-pet-runs/sardinia/frames/running-left/02.png",
+          "width": 192,
+          "height": 208,
+          "nontransparent_pixels": 12767,
+          "bbox": [
+            5,
+            39,
+            187,
+            165
+          ],
+          "edge_pixels": 0,
+          "chroma_adjacent_pixels": 201
+        },
+        {
+          "index": 3,
+          "file": "/Users/carolinevrablik/Desktop/Studies/2 Semester/2Sem, Critical Coding/Ikeda-Sampler/.hatch-pet-runs/sardinia/frames/running-left/03.png",
+          "width": 192,
+          "height": 208,
+          "nontransparent_pixels": 12152,
+          "bbox": [
+            11,
+            42,
+            181,
+            167
+          ],
+          "edge_pixels": 0,
+          "chroma_adjacent_pixels": 174
+        },
+        {
+          "index": 4,
+          "file": "/Users/carolinevrablik/Desktop/Studies/2 Semester/2Sem, Critical Coding/Ikeda-Sampler/.hatch-pet-runs/sardinia/frames/running-left/04.png",
+          "width": 192,
+          "height": 208,
+          "nontransparent_pixels": 11964,
+          "bbox": [
+            10,
+            43,
+            182,
+            168
+          ],
+          "edge_pixels": 0,
+          "chroma_adjacent_pixels": 173
+        },
+        {
+          "index": 5,
+          "file": "/Users/carolinevrablik/Desktop/Studies/2 Semester/2Sem, Critical Coding/Ikeda-Sampler/.hatch-pet-runs/sardinia/frames/running-left/05.png",
+          "width": 192,
+          "height": 208,
+          "nontransparent_pixels": 12034,
+          "bbox": [
+            8,
+            44,
+            184,
+            167
+          ],
+          "edge_pixels": 0,
+          "chroma_adjacent_pixels": 179
+        },
+        {
+          "index": 6,
+          "file": "/Users/carolinevrablik/Desktop/Studies/2 Semester/2Sem, Critical Coding/Ikeda-Sampler/.hatch-pet-runs/sardinia/frames/running-left/06.png",
+          "width": 192,
+          "height": 208,
+          "nontransparent_pixels": 11206,
+          "bbox": [
+            12,
+            44,
+            180,
+            166
+          ],
+          "edge_pixels": 0,
+          "chroma_adjacent_pixels": 172
+        },
+        {
+          "index": 7,
+          "file": "/Users/carolinevrablik/Desktop/Studies/2 Semester/2Sem, Critical Coding/Ikeda-Sampler/.hatch-pet-runs/sardinia/frames/running-left/07.png",
+          "width": 192,
+          "height": 208,
+          "nontransparent_pixels": 11943,
+          "bbox": [
+            12,
+            44,
+            180,
+            168
+          ],
+          "edge_pixels": 0,
+          "chroma_adjacent_pixels": 183
+        }
+      ]
+    },
+    {
+      "state": "waving",
+      "expected_frames": 4,
+      "actual_frames": 4,
+      "extraction_method": "stable-slots",
+      "ok": true,
+      "errors": [],
+      "warnings": [
+        "waving used extraction method stable-slots; confirm motion playback remains stable and unclipped"
+      ],
+      "frames": [
+        {
+          "index": 0,
+          "file": "/Users/carolinevrablik/Desktop/Studies/2 Semester/2Sem, Critical Coding/Ikeda-Sampler/.hatch-pet-runs/sardinia/frames/waving/00.png",
+          "width": 192,
+          "height": 208,
+          "nontransparent_pixels": 16230,
+          "bbox": [
+            5,
+            36,
+            187,
+            172
+          ],
+          "edge_pixels": 0,
+          "chroma_adjacent_pixels": 123
+        },
+        {
+          "index": 1,
+          "file": "/Users/carolinevrablik/Desktop/Studies/2 Semester/2Sem, Critical Coding/Ikeda-Sampler/.hatch-pet-runs/sardinia/frames/waving/01.png",
+          "width": 192,
+          "height": 208,
+          "nontransparent_pixels": 16213,
+          "bbox": [
+            5,
+            36,
+            187,
+            172
+          ],
+          "edge_pixels": 0,
+          "chroma_adjacent_pixels": 101
+        },
+        {
+          "index": 2,
+          "file": "/Users/carolinevrablik/Desktop/Studies/2 Semester/2Sem, Critical Coding/Ikeda-Sampler/.hatch-pet-runs/sardinia/frames/waving/02.png",
+          "width": 192,
+          "height": 208,
+          "nontransparent_pixels": 16556,
+          "bbox": [
+            5,
+            36,
+            187,
+            172
+          ],
+          "edge_pixels": 0,
+          "chroma_adjacent_pixels": 91
+        },
+        {
+          "index": 3,
+          "file": "/Users/carolinevrablik/Desktop/Studies/2 Semester/2Sem, Critical Coding/Ikeda-Sampler/.hatch-pet-runs/sardinia/frames/waving/03.png",
+          "width": 192,
+          "height": 208,
+          "nontransparent_pixels": 16214,
+          "bbox": [
+            5,
+            36,
+            187,
+            172
+          ],
+          "edge_pixels": 0,
+          "chroma_adjacent_pixels": 116
+        }
+      ]
+    },
+    {
+      "state": "jumping",
+      "expected_frames": 5,
+      "actual_frames": 5,
+      "extraction_method": "stable-slots",
+      "ok": true,
+      "errors": [],
+      "warnings": [
+        "jumping used extraction method stable-slots; confirm motion playback remains stable and unclipped"
+      ],
+      "frames": [
+        {
+          "index": 0,
+          "file": "/Users/carolinevrablik/Desktop/Studies/2 Semester/2Sem, Critical Coding/Ikeda-Sampler/.hatch-pet-runs/sardinia/frames/jumping/00.png",
+          "width": 192,
+          "height": 208,
+          "nontransparent_pixels": 8480,
+          "bbox": [
+            13,
+            121,
+            179,
+            202
+          ],
+          "edge_pixels": 0,
+          "chroma_adjacent_pixels": 65
+        },
+        {
+          "index": 1,
+          "file": "/Users/carolinevrablik/Desktop/Studies/2 Semester/2Sem, Critical Coding/Ikeda-Sampler/.hatch-pet-runs/sardinia/frames/jumping/01.png",
+          "width": 192,
+          "height": 208,
+          "nontransparent_pixels": 9478,
+          "bbox": [
+            19,
+            50,
+            173,
+            196
+          ],
+          "edge_pixels": 0,
+          "chroma_adjacent_pixels": 83
+        },
+        {
+          "index": 2,
+          "file": "/Users/carolinevrablik/Desktop/Studies/2 Semester/2Sem, Critical Coding/Ikeda-Sampler/.hatch-pet-runs/sardinia/frames/jumping/02.png",
+          "width": 192,
+          "height": 208,
+          "nontransparent_pixels": 8553,
+          "bbox": [
+            13,
+            5,
+            179,
+            92
+          ],
+          "edge_pixels": 0,
+          "chroma_adjacent_pixels": 53
+        },
+        {
+          "index": 3,
+          "file": "/Users/carolinevrablik/Desktop/Studies/2 Semester/2Sem, Critical Coding/Ikeda-Sampler/.hatch-pet-runs/sardinia/frames/jumping/03.png",
+          "width": 192,
+          "height": 208,
+          "nontransparent_pixels": 8866,
+          "bbox": [
+            22,
+            54,
+            170,
+            191
+          ],
+          "edge_pixels": 0,
+          "chroma_adjacent_pixels": 97
+        },
+        {
+          "index": 4,
+          "file": "/Users/carolinevrablik/Desktop/Studies/2 Semester/2Sem, Critical Coding/Ikeda-Sampler/.hatch-pet-runs/sardinia/frames/jumping/04.png",
+          "width": 192,
+          "height": 208,
+          "nontransparent_pixels": 8511,
+          "bbox": [
+            13,
+            117,
+            179,
+            203
+          ],
+          "edge_pixels": 0,
+          "chroma_adjacent_pixels": 56
+        }
+      ]
+    },
+    {
+      "state": "failed",
+      "expected_frames": 8,
+      "actual_frames": 8,
+      "extraction_method": "stable-slots",
+      "ok": true,
+      "errors": [],
+      "warnings": [
+        "failed used extraction method stable-slots; confirm motion playback remains stable and unclipped"
+      ],
+      "frames": [
+        {
+          "index": 0,
+          "file": "/Users/carolinevrablik/Desktop/Studies/2 Semester/2Sem, Critical Coding/Ikeda-Sampler/.hatch-pet-runs/sardinia/frames/failed/00.png",
+          "width": 192,
+          "height": 208,
+          "nontransparent_pixels": 16668,
+          "bbox": [
+            22,
+            28,
+            187,
+            175
+          ],
+          "edge_pixels": 0,
+          "chroma_adjacent_pixels": 151
+        },
+        {
+          "index": 1,
+          "file": "/Users/carolinevrablik/Desktop/Studies/2 Semester/2Sem, Critical Coding/Ikeda-Sampler/.hatch-pet-runs/sardinia/frames/failed/01.png",
+          "width": 192,
+          "height": 208,
+          "nontransparent_pixels": 16283,
+          "bbox": [
+            5,
+            33,
+            187,
+            174
+          ],
+          "edge_pixels": 0,
+          "chroma_adjacent_pixels": 187
+        },
+        {
+          "index": 2,
+          "file": "/Users/carolinevrablik/Desktop/Studies/2 Semester/2Sem, Critical Coding/Ikeda-Sampler/.hatch-pet-runs/sardinia/frames/failed/02.png",
+          "width": 192,
+          "height": 208,
+          "nontransparent_pixels": 15050,
+          "bbox": [
+            5,
+            52,
+            187,
+            176
+          ],
+          "edge_pixels": 0,
+          "chroma_adjacent_pixels": 182
+        },
+        {
+          "index": 3,
+          "file": "/Users/carolinevrablik/Desktop/Studies/2 Semester/2Sem, Critical Coding/Ikeda-Sampler/.hatch-pet-runs/sardinia/frames/failed/03.png",
+          "width": 192,
+          "height": 208,
+          "nontransparent_pixels": 13711,
+          "bbox": [
+            5,
+            69,
+            187,
+            182
+          ],
+          "edge_pixels": 0,
+          "chroma_adjacent_pixels": 146
+        },
+        {
+          "index": 4,
+          "file": "/Users/carolinevrablik/Desktop/Studies/2 Semester/2Sem, Critical Coding/Ikeda-Sampler/.hatch-pet-runs/sardinia/frames/failed/04.png",
+          "width": 192,
+          "height": 208,
+          "nontransparent_pixels": 14474,
+          "bbox": [
+            5,
+            52,
+            187,
+            178
+          ],
+          "edge_pixels": 0,
+          "chroma_adjacent_pixels": 167
+        },
+        {
+          "index": 5,
+          "file": "/Users/carolinevrablik/Desktop/Studies/2 Semester/2Sem, Critical Coding/Ikeda-Sampler/.hatch-pet-runs/sardinia/frames/failed/05.png",
+          "width": 192,
+          "height": 208,
+          "nontransparent_pixels": 15914,
+          "bbox": [
+            5,
+            35,
+            187,
+            174
+          ],
+          "edge_pixels": 0,
+          "chroma_adjacent_pixels": 188
+        },
+        {
+          "index": 6,
+          "file": "/Users/carolinevrablik/Desktop/Studies/2 Semester/2Sem, Critical Coding/Ikeda-Sampler/.hatch-pet-runs/sardinia/frames/failed/06.png",
+          "width": 192,
+          "height": 208,
+          "nontransparent_pixels": 16150,
+          "bbox": [
+            5,
+            26,
+            187,
+            174
+          ],
+          "edge_pixels": 0,
+          "chroma_adjacent_pixels": 193
+        },
+        {
+          "index": 7,
+          "file": "/Users/carolinevrablik/Desktop/Studies/2 Semester/2Sem, Critical Coding/Ikeda-Sampler/.hatch-pet-runs/sardinia/frames/failed/07.png",
+          "width": 192,
+          "height": 208,
+          "nontransparent_pixels": 16048,
+          "bbox": [
+            5,
+            33,
+            166,
+            175
+          ],
+          "edge_pixels": 0,
+          "chroma_adjacent_pixels": 138
+        }
+      ]
+    },
+    {
+      "state": "waiting",
+      "expected_frames": 6,
+      "actual_frames": 6,
+      "extraction_method": "stable-slots",
+      "ok": true,
+      "errors": [],
+      "warnings": [
+        "waiting used extraction method stable-slots; confirm motion playback remains stable and unclipped"
+      ],
+      "frames": [
+        {
+          "index": 0,
+          "file": "/Users/carolinevrablik/Desktop/Studies/2 Semester/2Sem, Critical Coding/Ikeda-Sampler/.hatch-pet-runs/sardinia/frames/waiting/00.png",
+          "width": 192,
+          "height": 208,
+          "nontransparent_pixels": 16002,
+          "bbox": [
+            13,
+            18,
+            177,
+            190
+          ],
+          "edge_pixels": 0,
+          "chroma_adjacent_pixels": 107
+        },
+        {
+          "index": 1,
+          "file": "/Users/carolinevrablik/Desktop/Studies/2 Semester/2Sem, Critical Coding/Ikeda-Sampler/.hatch-pet-runs/sardinia/frames/waiting/01.png",
+          "width": 192,
+          "height": 208,
+          "nontransparent_pixels": 16142,
+          "bbox": [
+            12,
+            18,
+            179,
+            190
+          ],
+          "edge_pixels": 0,
+          "chroma_adjacent_pixels": 100
+        },
+        {
+          "index": 2,
+          "file": "/Users/carolinevrablik/Desktop/Studies/2 Semester/2Sem, Critical Coding/Ikeda-Sampler/.hatch-pet-runs/sardinia/frames/waiting/02.png",
+          "width": 192,
+          "height": 208,
+          "nontransparent_pixels": 16770,
+          "bbox": [
+            6,
+            18,
+            186,
+            190
+          ],
+          "edge_pixels": 0,
+          "chroma_adjacent_pixels": 85
+        },
+        {
+          "index": 3,
+          "file": "/Users/carolinevrablik/Desktop/Studies/2 Semester/2Sem, Critical Coding/Ikeda-Sampler/.hatch-pet-runs/sardinia/frames/waiting/03.png",
+          "width": 192,
+          "height": 208,
+          "nontransparent_pixels": 17014,
+          "bbox": [
+            5,
+            18,
+            187,
+            190
+          ],
+          "edge_pixels": 0,
+          "chroma_adjacent_pixels": 97
+        },
+        {
+          "index": 4,
+          "file": "/Users/carolinevrablik/Desktop/Studies/2 Semester/2Sem, Critical Coding/Ikeda-Sampler/.hatch-pet-runs/sardinia/frames/waiting/04.png",
+          "width": 192,
+          "height": 208,
+          "nontransparent_pixels": 16130,
+          "bbox": [
+            9,
+            18,
+            183,
+            190
+          ],
+          "edge_pixels": 0,
+          "chroma_adjacent_pixels": 103
+        },
+        {
+          "index": 5,
+          "file": "/Users/carolinevrablik/Desktop/Studies/2 Semester/2Sem, Critical Coding/Ikeda-Sampler/.hatch-pet-runs/sardinia/frames/waiting/05.png",
+          "width": 192,
+          "height": 208,
+          "nontransparent_pixels": 15489,
+          "bbox": [
+            15,
+            18,
+            177,
+            190
+          ],
+          "edge_pixels": 0,
+          "chroma_adjacent_pixels": 101
+        }
+      ]
+    },
+    {
+      "state": "running",
+      "expected_frames": 6,
+      "actual_frames": 6,
+      "extraction_method": "stable-slots",
+      "ok": true,
+      "errors": [],
+      "warnings": [
+        "running used extraction method stable-slots; confirm motion playback remains stable and unclipped"
+      ],
+      "frames": [
+        {
+          "index": 0,
+          "file": "/Users/carolinevrablik/Desktop/Studies/2 Semester/2Sem, Critical Coding/Ikeda-Sampler/.hatch-pet-runs/sardinia/frames/running/00.png",
+          "width": 192,
+          "height": 208,
+          "nontransparent_pixels": 12316,
+          "bbox": [
+            8,
+            42,
+            184,
+            160
+          ],
+          "edge_pixels": 0,
+          "chroma_adjacent_pixels": 109
+        },
+        {
+          "index": 1,
+          "file": "/Users/carolinevrablik/Desktop/Studies/2 Semester/2Sem, Critical Coding/Ikeda-Sampler/.hatch-pet-runs/sardinia/frames/running/01.png",
+          "width": 192,
+          "height": 208,
+          "nontransparent_pixels": 12611,
+          "bbox": [
+            6,
+            42,
+            186,
+            156
+          ],
+          "edge_pixels": 0,
+          "chroma_adjacent_pixels": 121
+        },
+        {
+          "index": 2,
+          "file": "/Users/carolinevrablik/Desktop/Studies/2 Semester/2Sem, Critical Coding/Ikeda-Sampler/.hatch-pet-runs/sardinia/frames/running/02.png",
+          "width": 192,
+          "height": 208,
+          "nontransparent_pixels": 12144,
+          "bbox": [
+            9,
+            44,
+            183,
+            157
+          ],
+          "edge_pixels": 0,
+          "chroma_adjacent_pixels": 109
+        },
+        {
+          "index": 3,
+          "file": "/Users/carolinevrablik/Desktop/Studies/2 Semester/2Sem, Critical Coding/Ikeda-Sampler/.hatch-pet-runs/sardinia/frames/running/03.png",
+          "width": 192,
+          "height": 208,
+          "nontransparent_pixels": 12547,
+          "bbox": [
+            8,
+            44,
+            184,
+            163
+          ],
+          "edge_pixels": 0,
+          "chroma_adjacent_pixels": 107
+        },
+        {
+          "index": 4,
+          "file": "/Users/carolinevrablik/Desktop/Studies/2 Semester/2Sem, Critical Coding/Ikeda-Sampler/.hatch-pet-runs/sardinia/frames/running/04.png",
+          "width": 192,
+          "height": 208,
+          "nontransparent_pixels": 12063,
+          "bbox": [
+            5,
+            52,
+            187,
+            164
+          ],
+          "edge_pixels": 0,
+          "chroma_adjacent_pixels": 122
+        },
+        {
+          "index": 5,
+          "file": "/Users/carolinevrablik/Desktop/Studies/2 Semester/2Sem, Critical Coding/Ikeda-Sampler/.hatch-pet-runs/sardinia/frames/running/05.png",
+          "width": 192,
+          "height": 208,
+          "nontransparent_pixels": 11831,
+          "bbox": [
+            9,
+            53,
+            183,
+            166
+          ],
+          "edge_pixels": 0,
+          "chroma_adjacent_pixels": 112
+        }
+      ]
+    },
+    {
+      "state": "review",
+      "expected_frames": 6,
+      "actual_frames": 6,
+      "extraction_method": "stable-slots",
+      "ok": true,
+      "errors": [],
+      "warnings": [
+        "review used extraction method stable-slots; confirm motion playback remains stable and unclipped"
+      ],
+      "frames": [
+        {
+          "index": 0,
+          "file": "/Users/carolinevrablik/Desktop/Studies/2 Semester/2Sem, Critical Coding/Ikeda-Sampler/.hatch-pet-runs/sardinia/frames/review/00.png",
+          "width": 192,
+          "height": 208,
+          "nontransparent_pixels": 14624,
+          "bbox": [
+            6,
+            42,
+            186,
+            166
+          ],
+          "edge_pixels": 0,
+          "chroma_adjacent_pixels": 131
+        },
+        {
+          "index": 1,
+          "file": "/Users/carolinevrablik/Desktop/Studies/2 Semester/2Sem, Critical Coding/Ikeda-Sampler/.hatch-pet-runs/sardinia/frames/review/01.png",
+          "width": 192,
+          "height": 208,
+          "nontransparent_pixels": 14288,
+          "bbox": [
+            7,
+            41,
+            185,
+            165
+          ],
+          "edge_pixels": 0,
+          "chroma_adjacent_pixels": 121
+        },
+        {
+          "index": 2,
+          "file": "/Users/carolinevrablik/Desktop/Studies/2 Semester/2Sem, Critical Coding/Ikeda-Sampler/.hatch-pet-runs/sardinia/frames/review/02.png",
+          "width": 192,
+          "height": 208,
+          "nontransparent_pixels": 14989,
+          "bbox": [
+            6,
+            41,
+            186,
+            172
+          ],
+          "edge_pixels": 0,
+          "chroma_adjacent_pixels": 138
+        },
+        {
+          "index": 3,
+          "file": "/Users/carolinevrablik/Desktop/Studies/2 Semester/2Sem, Critical Coding/Ikeda-Sampler/.hatch-pet-runs/sardinia/frames/review/03.png",
+          "width": 192,
+          "height": 208,
+          "nontransparent_pixels": 14497,
+          "bbox": [
+            8,
+            41,
+            184,
+            168
+          ],
+          "edge_pixels": 0,
+          "chroma_adjacent_pixels": 132
+        },
+        {
+          "index": 4,
+          "file": "/Users/carolinevrablik/Desktop/Studies/2 Semester/2Sem, Critical Coding/Ikeda-Sampler/.hatch-pet-runs/sardinia/frames/review/04.png",
+          "width": 192,
+          "height": 208,
+          "nontransparent_pixels": 14550,
+          "bbox": [
+            10,
+            36,
+            182,
+            170
+          ],
+          "edge_pixels": 0,
+          "chroma_adjacent_pixels": 127
+        },
+        {
+          "index": 5,
+          "file": "/Users/carolinevrablik/Desktop/Studies/2 Semester/2Sem, Critical Coding/Ikeda-Sampler/.hatch-pet-runs/sardinia/frames/review/05.png",
+          "width": 192,
+          "height": 208,
+          "nontransparent_pixels": 14568,
+          "bbox": [
+            5,
+            41,
+            187,
+            168
+          ],
+          "edge_pixels": 0,
+          "chroma_adjacent_pixels": 129
+        }
+      ]
+    }
+  ]
+}
