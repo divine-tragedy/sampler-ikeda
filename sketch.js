@@ -46,8 +46,8 @@ const saveCooldown = 1400;
 const parameterLoopLength = 5000;
 const parameterRecordInterval = 70;
 const loopLifetimeCycles = 5;
-const fingerModeSwitchFrames = 3;
-const fingerModeMissingFrames = 3;
+const fingerModeSwitchFrames = 8;
+const fingerModeMissingFrames = 15;
 
 const processOrder = ["loopCreator", "motion", "texture", "space", "decay"];
 
@@ -118,15 +118,15 @@ const samplePaths = [
   "sounds/SR006F.wav",
   "sounds/Scratching-Strings.wav",
   "sounds/Thats-My-Laugh.wav",
-  "sounds/text/Balkan Central Europe.mp3",
+  "sounds/text/Balkan-Central-Europe.mp3",
   "sounds/text/Bjork-Interview-1996.mp3",
   "sounds/text/Cyberstress.mp3",
-  "sounds/text/Hello My Name Is Bjork.mp3",
+  "sounds/text/Hello-MyNameIsBjork.mp3",
   "sounds/text/Jodie-Foster-Gay-Silence.mp3",
-  "sounds/text/Kero Kero Bonito - I'd Rather Sleep.mp3",
-  "sounds/text/Make Me Moo - The Residents.mp3",
+  "sounds/text/KeroKeroBonito-I'dRatherSleep.mp3",
+  "sounds/text/MakeMeMoo-TheResidents.mp3",
   "sounds/text/Weirdcore-Analysis.mp3",
-  "sounds/text/Yung Lean - Hurt.mp3",
+  "sounds/text/YungLean-Hurt.mp3",
 ];
 const sampleGridCols = 4;
 const sampleGridRows = 4;
@@ -166,14 +166,21 @@ function preload() {
 }
 
 function setup() {
-  createCanvas(canvasW, canvasH);
+  createCanvas(448, 257);
   pixelDensity(1);
   frameRate(30);
   textFont("monospace");
 
+  function keyPressed() {
+  if (key === 'f' || key === 'F') {
+    let fs = fullscreen();
+    fullscreen(true);
+  }
+}
+
   try {
     video = createCapture(VIDEO);
-    video.size(canvasW, canvasH);
+    video.size(width, height);
     video.elt.setAttribute("playsinline", "true");
     video.elt.muted = true;
     video.elt.play().catch((error) => {
@@ -319,12 +326,14 @@ function drawFrame() {
     visualSystem.drawAudioReactiveLayer(audioAnalysis);
     visualSystem.drawHands(sorted, activeFinger, leftHand);
     visualSystem.drawTrackingStatus(sorted, activeFinger);
+    visualSystem.drawGestureInstruction(activeFinger);
     return;
   }
   visualSystem.drawSampleGrid(sampleGridVisible, sampleGridPoint);
   visualSystem.drawAudioReactiveLayer(audioAnalysis);
   visualSystem.drawParticles();
   visualSystem.drawHands(sorted, activeFinger, leftHand);
+  visualSystem.drawGestureInstruction(activeFinger);
 }
 
 function readAudioAnalysis() {
@@ -710,9 +719,10 @@ function handleLeftOpenPalmStop(leftHand) {
 function stopAllAudio() {
   pendingAudioEvents = [];
   pendingSampleLoopEvent = null;
-  loopMemories = [];
-  savedBlocks = [];
+  loopMemories = loopMemories.filter((memory) => memory.background);
+  savedBlocks = savedBlocks.filter((block) => loopMemories.some((memory) => memory.id === block.id));
   for (const key of processOrder) {
+    if (key === "loopCreator" || key === "motion" || key === "texture") continue;
     const layer = layers[key];
     if (!layer) continue;
     layer.saved = false;
@@ -723,7 +733,7 @@ function stopAllAudio() {
   }
   if (audioEngine) {
     try {
-      audioEngine.stopAll(Tone.now());
+      audioEngine.stopTransient(Tone.now());
     } catch (error) {
       systemMessage = "audio stop skipped";
       console.error(error);
@@ -792,11 +802,7 @@ function triggerSelectedNote(rightHand, leftHand, key = activeProcessKey) {
   }
 
   loopMemories.push(memory);
-  while (loopMemories.length > 8) {
-    const removableIndex = loopMemories.findIndex((item) => !item.background);
-    const removed = loopMemories.splice(removableIndex >= 0 ? removableIndex : 0, 1)[0];
-    savedBlocks = savedBlocks.filter((block) => block.id !== removed.id);
-  }
+  pruneLoopMemories();
   visualSystem.createSavedBlock(memory);
   visualSystem.createEventParticle({ ...event, loopMemoryId: memory.id });
   try {
@@ -843,11 +849,7 @@ function triggerSelectedSampleLoopMemory(rightHand) {
   };
 
   loopMemories.push(memory);
-  while (loopMemories.length > 8) {
-    const removableIndex = loopMemories.findIndex((item) => !item.background);
-    const removed = loopMemories.splice(removableIndex >= 0 ? removableIndex : 0, 1)[0];
-    savedBlocks = savedBlocks.filter((block) => block.id !== removed.id);
-  }
+  pruneLoopMemories();
   visualSystem.createSavedBlock(memory);
   visualSystem.createEventParticle({ ...event, loopMemoryId: memory.id });
   playOrQueueGestureEvent(event, 1);
@@ -889,6 +891,15 @@ function clearOtherProcessMemories(key) {
   if (!key) return;
   loopMemories = loopMemories.filter((memory) => memory.key === key);
   savedBlocks = savedBlocks.filter((block) => block.key === key);
+}
+
+function pruneLoopMemories() {
+  while (loopMemories.length > 8) {
+    const removableIndex = loopMemories.findIndex((item) => !item.background);
+    if (removableIndex < 0) return;
+    const removed = loopMemories.splice(removableIndex, 1)[0];
+    savedBlocks = savedBlocks.filter((block) => block.id !== removed.id);
+  }
 }
 
 function createGestureEvent(engineKey, rightHand, leftHand) {
@@ -1036,10 +1047,7 @@ function saveProcess(key) {
     fading: false,
   };
   loopMemories.push(memory);
-  while (loopMemories.length > 8) {
-    const removed = loopMemories.shift();
-    savedBlocks = savedBlocks.filter((block) => block.id !== removed.id);
-  }
+  pruneLoopMemories();
 
   visualSystem.createSavedBlock(memory);
 }
@@ -1235,9 +1243,17 @@ class GestureDetector {
 
     missingFingerFrames = 0;
     if (!stableActiveFinger) {
-      stableActiveFinger = rawGesture;
-      pendingFingerCount = null;
-      pendingFingerFrames = 0;
+      if (pendingFingerCount === rawGesture.count) {
+        pendingFingerFrames++;
+      } else {
+        pendingFingerCount = rawGesture.count;
+        pendingFingerFrames = 1;
+      }
+      if (pendingFingerFrames >= fingerModeSwitchFrames) {
+        stableActiveFinger = rawGesture;
+        pendingFingerCount = null;
+        pendingFingerFrames = 0;
+      }
       return stableActiveFinger;
     }
 

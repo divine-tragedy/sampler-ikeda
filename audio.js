@@ -98,14 +98,17 @@ class AudioEngine {
   }
 
   createSampleEngine() {
+    const limiter = new Tone.Limiter(-8).connect(this.mainGain);
     const compressor = new Tone.Compressor({
-      threshold: -24,
-      ratio: 3,
-      attack: 0.012,
-      release: 0.22,
-    }).connect(this.mainGain);
-    const gain = new Tone.Gain(0.54).connect(compressor);
-    const states = samplePaths.map((path) => ({ path, loaded: false, failed: false }));
+      threshold: -30,
+      ratio: 8,
+      attack: 0.006,
+      release: 0.18,
+    }).connect(limiter);
+    const lowpass = new Tone.Filter(2600, "lowpass").connect(compressor);
+    const highpass = new Tone.Filter(80, "highpass").connect(lowpass);
+    const gain = new Tone.Gain(0.92).connect(highpass);
+    const states = samplePaths.map((path) => ({ path, loaded: false, failed: false, trimDb: 0 }));
     const players = samplePaths.map((path, index) => {
       const player = new Tone.Player({
         url: path,
@@ -113,6 +116,7 @@ class AudioEngine {
         fadeOut: 0.18,
         onload: () => {
           states[index].loaded = true;
+          states[index].trimDb = this.getSampleTrimDb(player);
         },
         onerror: (error) => {
           states[index].failed = true;
@@ -120,9 +124,10 @@ class AudioEngine {
         },
       }).connect(gain);
       player.samplePath = path;
+      player.sampleIndex = index;
       return player;
     });
-    return { gain, compressor, players, states, activeVoices: new Set(), loopPlayer: null, loopIndex: null, loopGridCell: null, loopStopTime: null };
+    return { gain, highpass, lowpass, compressor, limiter, players, states, activeVoices: new Set(), loopPlayer: null, loopIndex: null, loopGridCell: null, loopStopTime: null };
   }
 
   async start() {
@@ -289,7 +294,10 @@ class AudioEngine {
     }
     systemMessage = "";
     const repeatCount = max(1, floor(event.repeatCount || 1));
-    const volume = map(velocity, 0, 1, -28, -12);
+    const stateIndex = Number.isFinite(player.sampleIndex) ? player.sampleIndex : index;
+    const trimDb = this.sampleEngine.states[stateIndex] ? this.sampleEngine.states[stateIndex].trimDb : 0;
+    const volume = map(velocity, 0, 1, -20, -7) + trimDb;
+    this.setSampleFilter(event, time);
     for (let i = 0; i < repeatCount; i++) {
       const startTime = time + i * 0.24;
       this.startSampleVoice(player, startTime, volume, event.playbackRate || 1);
@@ -297,14 +305,42 @@ class AudioEngine {
     return true;
   }
 
+  getSampleTrimDb(player) {
+    try {
+      const buffer = player.buffer && (player.buffer._buffer || (typeof player.buffer.get === "function" ? player.buffer.get() : player.buffer));
+      if (!buffer || !buffer.numberOfChannels) return 0;
+      let peak = 0;
+      for (let channel = 0; channel < buffer.numberOfChannels; channel++) {
+        const data = buffer.getChannelData(channel);
+        const step = max(1, floor(data.length / 12000));
+        for (let i = 0; i < data.length; i += step) peak = max(peak, abs(data[i]));
+      }
+      if (peak <= 0) return 0;
+      return constrain(-12 - 20 * Math.log10(peak), -14, 4);
+    } catch (error) {
+      return 0;
+    }
+  }
+
+  setSampleFilter(event, time) {
+    const baseCutoff = map(event.filterValue || 0.5, 0, 1, 900, 3600);
+    const occasionalDarkening = random() < 0.38 ? random(0.45, 0.82) : 1;
+    const cutoff = constrain(baseCutoff * occasionalDarkening, 520, 4200);
+    this.sampleEngine.lowpass.frequency.cancelScheduledValues(time);
+    this.sampleEngine.lowpass.frequency.setValueAtTime(this.sampleEngine.lowpass.frequency.value || cutoff, time);
+    this.sampleEngine.lowpass.frequency.rampTo(cutoff, 0.18);
+    this.sampleEngine.highpass.frequency.setValueAtTime(random() < 0.25 ? 140 : 80, time);
+  }
+
   startSampleVoice(sourcePlayer, time, volume, playbackRate) {
     const isTextSample = sourcePlayer.samplePath && sourcePlayer.samplePath.includes("/text/");
     if (isTextSample) this.stopTextSampleVoices(time);
-    this.trimSampleVoices(time, 2);
+    if (isTextSample) this.trimSampleVoices(time, 2);
     const voice = new Tone.Player({
       url: sourcePlayer.buffer,
       fadeIn: 0.025,
       fadeOut: 0.18,
+      loop: true,
       playbackRate,
       onstop: () => {
         this.sampleEngine.activeVoices.delete(voice);
@@ -316,6 +352,9 @@ class AudioEngine {
     voice.isTextSample = isTextSample;
     this.sampleEngine.activeVoices.add(voice);
     voice.start(time);
+    const minimumDuration = 10;
+    const naturalDuration = sourcePlayer.buffer && Number.isFinite(sourcePlayer.buffer.duration) ? sourcePlayer.buffer.duration / max(0.01, playbackRate) : minimumDuration;
+    voice.stop(time + max(minimumDuration, naturalDuration));
   }
 
   stopTextSampleVoices(time) {
@@ -357,7 +396,8 @@ class AudioEngine {
     if (player.samplePath && player.samplePath.includes("/text/")) this.stopTextSampleVoices(time);
 
     this.stopSampleLoop(time);
-    this.trimSampleVoices(time, 2);
+    if (player.samplePath && player.samplePath.includes("/text/")) this.trimSampleVoices(time, 2);
+    this.setSampleFilter(event, time);
     const loopPlayer = new Tone.Player({
       url: player.buffer,
       fadeIn: 0.03,
@@ -365,14 +405,15 @@ class AudioEngine {
       loop: true,
       playbackRate: 1,
     }).connect(this.sampleEngine.gain);
-    loopPlayer.volume.value = map(velocity, 0, 1, -30, -14);
+    const trimDb = this.sampleEngine.states[index] ? this.sampleEngine.states[index].trimDb : 0;
+    loopPlayer.volume.value = map(velocity, 0, 1, -22, -9) + trimDb;
     loopPlayer.samplePath = player.samplePath || "";
     loopPlayer.isTextSample = loopPlayer.samplePath.includes("/text/");
     loopPlayer.start(time);
     this.sampleEngine.loopPlayer = loopPlayer;
     this.sampleEngine.loopIndex = index;
     this.sampleEngine.loopGridCell = Number.isFinite(event.gridCell) ? event.gridCell : index;
-    this.sampleEngine.loopStopTime = time + max(1, player.buffer.duration || 1) * 5;
+    this.sampleEngine.loopStopTime = time + max(10, max(1, player.buffer.duration || 1) * 5);
     systemMessage = "";
     return true;
   }
@@ -423,6 +464,13 @@ class AudioEngine {
       this.loopEngine.clickGain.gain.setValueAtTime(0, time);
       this.textureEngine.hissGain.gain.setValueAtTime(0, time);
       this.textureEngine.crackleGain.gain.setValueAtTime(0, time);
+    } catch (error) {}
+  }
+
+  stopTransient(time) {
+    this.stopSamples(time);
+    try {
+      this.spaceEngine.lead.triggerRelease(time);
     } catch (error) {}
   }
 

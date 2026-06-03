@@ -346,8 +346,8 @@ class VisualSystem {
         if (!visibleShape) continue;
         const displaced = this.applyPercussionPacking(x, y);
         if (showNextText) {
-          fill(255, min(255, 255 * this.transitionProgress * 1.15) * previousAlpha);
-          circle(displaced.x, displaced.y, this.dotSize);
+          fill(255, 255 * previousAlpha);
+          circle(displaced.x, displaced.y, this.dotSize * 1.35);
           continue;
         }
         if (insideText && !insidePaint) {
@@ -378,12 +378,13 @@ class VisualSystem {
   }
 
   applyPercussionPacking(x, y) {
-    if (!this.percussionDots.length) return { x, y };
+    const activeDots = this.percussionDots.filter((dot) => dot.fromPinch);
+    if (!activeDots.length) return { x, y };
     let dx = 0;
     let dy = 0;
-    for (const dot of this.percussionDots) {
+    for (const dot of activeDots) {
       const wobble = sin(frameCount * 0.035 + dot.seed) * 10;
-      const radius = dot.radius * 1.25 + wobble + min(220, dot.age * 0.42);
+      const radius = dot.radius * 2.7 + wobble + min(185, dot.age * 0.52);
       const distance = dist(x, y, dot.x, dot.y);
       if (distance <= 0 || distance > radius) continue;
       const force = pow(1 - distance / radius, 1.7) * radius * 0.72;
@@ -407,9 +408,10 @@ class VisualSystem {
       age: 0,
       life: 1,
       pulse: 1,
-      radius: random(68, 118),
+      fromPinch: true,
+      radius: 42,
     });
-    while (this.percussionDots.length > 1) this.percussionDots.shift();
+    while (this.percussionDots.length > 12) this.percussionDots.shift();
   }
 
   drawStoredPercussionDots() {
@@ -418,17 +420,12 @@ class VisualSystem {
       dot.age++;
       dot.life = max(0.32, dot.life * 0.9985);
       dot.pulse = max(0, (dot.pulse || 0) * 0.86);
-      const wobble = sin(frameCount * 0.035 + dot.seed) * 10;
-      const pulseSize = dot.pulse * 46;
-      const alpha = 145 * dot.life * (1 - this.threePromptProgress * 0.35);
+      const wobble = sin(frameCount * 0.035 + dot.seed) * 4;
+      const pulseSize = dot.pulse * 18;
+      const alpha = 190 * dot.life * (1 - this.threePromptProgress * 0.35);
       stroke(35, 112, 255, alpha);
-      strokeWeight(1.4);
-      ellipse(dot.x, dot.y, dot.radius + wobble + pulseSize, (dot.radius + wobble + pulseSize) * 0.72);
-      stroke(35, 112, 255, alpha * 0.52);
-      ellipse(dot.x, dot.y, dot.radius * 1.45 + wobble + pulseSize * 0.55, (dot.radius * 1.45 + wobble + pulseSize * 0.55) * 0.72);
-      noStroke();
-      fill(35, 112, 255, alpha * 0.85);
-      circle(dot.x, dot.y, 12 + pulseSize * 0.18 + (sin(frameCount * 0.08 + dot.seed) + 1) * 4);
+      strokeWeight(1.2 + dot.pulse * 0.8);
+      ellipse(dot.x, dot.y, dot.radius + wobble + pulseSize, dot.radius + wobble * 0.72 + pulseSize * 0.75);
       noFill();
     }
   }
@@ -461,15 +458,19 @@ class VisualSystem {
     if (!visible) return;
     const cellW = width / sampleGridCols;
     const cellH = height / sampleGridRows;
-    const col = isFinitePoint(point) ? floor(constrain(map(point.x, 0, width, 0, sampleGridCols), 0, sampleGridCols - 0.001)) : -1;
-    const row = isFinitePoint(point) ? floor(constrain(map(point.y, 0, height, 0, sampleGridRows), 0, sampleGridRows - 0.001)) : -1;
+    const activeCell = selectedSampleGridCell !== null
+      ? selectedSampleGridCell
+      : isFinitePoint(point)
+        ? floor(constrain(map(point.y, 0, height, 0, sampleGridRows), 0, sampleGridRows - 0.001)) * sampleGridCols + floor(constrain(map(point.x, 0, width, 0, sampleGridCols), 0, sampleGridCols - 0.001))
+        : null;
     const loopingCell = getLoopingSampleGridCell();
 
-    if (col >= 0 && row >= 0) {
+    if (activeCell !== null) {
+      const col = activeCell % sampleGridCols;
+      const row = floor(activeCell / sampleGridCols) % sampleGridRows;
       noStroke();
-      fill(255, 34, 28, 88 + this.globalAmp * 72);
-      const pad = 12 + this.globalAmp * 8;
-      rect(col * cellW + pad, row * cellH + pad, cellW - pad * 2, cellH - pad * 2);
+      fill(255, 34, 28, 116 + this.globalAmp * 68);
+      rect(col * cellW, row * cellH, cellW, cellH);
     }
 
     if (loopingCell !== null) {
@@ -595,11 +596,13 @@ class VisualSystem {
   }
 
   createEventParticle(event) {
-    this.pulseAudioObject(event);
-    if (event.loopPlayback && event.soundEngine === "motion" && event.loopMemoryId) {
+    if (event.soundEngine === "motion" && event.loopMemoryId) {
       const dot = this.percussionDots.find((item) => item.id === event.loopMemoryId);
       if (dot) dot.pulse = 1;
+      return;
     }
+    if (event.soundEngine === "motion") return;
+    this.pulseAudioObject(event);
     if (event.loopPlayback) return;
     const key = event.soundEngine || event.key || activeProcessKey || "loopCreator";
     const c = processColors[key] || processColors.loopCreator;
@@ -704,6 +707,28 @@ class VisualSystem {
     fill(this.transitionProgress > 0.5 ? 255 : 0, 150);
     textSize(13);
     text(message + (active ? " / " + active : ""), 26, height - 34);
+  }
+
+  drawGestureInstruction(activeFinger) {
+    const label = this.gestureInstructionLabel(activeFinger);
+    noStroke();
+    fill(255, 235);
+    rect(0, 0, width, 22);
+    fill(0);
+    textAlign(CENTER, CENTER);
+    textSize(11);
+    text(label, width / 2, 11);
+    textAlign(LEFT, BASELINE);
+  }
+
+  gestureInstructionLabel(activeFinger) {
+    if (!activeFinger) return "show right hand";
+    if (activeFinger.count === 1) return "index finger";
+    if (activeFinger.count === 2) return "thumb + index + pinch";
+    if (activeFinger.count === 3) return "thumb + index + middle";
+    if (activeFinger.count === 4) return "thumb + index + middle + ring";
+    if (activeFinger.count === 5) return "all fingers / samples";
+    return "show right hand";
   }
 
   drawEchoDot(point, size, phase, strength) {
