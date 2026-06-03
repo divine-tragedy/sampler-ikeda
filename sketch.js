@@ -1,6 +1,11 @@
 let video;
 let handPose;
 let hands = [];
+let bodyPose;
+let bodyPoses = [];
+let bodyPoseStarted = false;
+let bodyPoseLoading = false;
+let bodyPoseError = "";
 let handPoseStarted = false;
 let ml5ScriptRequested = false;
 let handPoseLoading = false;
@@ -21,12 +26,34 @@ let rightPinchActive = false;
 let lastSampleGridCell = null;
 let lastSampleGridAt = 0;
 let selectedSampleGridCell = null;
+let selectedSampleGridCells = { left: null, right: null };
+let lastSampleGridCells = { left: null, right: null };
+let lastSampleEvents = { left: null, right: null };
 let sampleModeWasActive = false;
 let saveCooldownUntil = 0;
 let stableActiveFinger = null;
 let pendingFingerCount = null;
 let pendingFingerFrames = 0;
 let missingFingerFrames = 0;
+let activeMode = null;
+let candidateMode = null;
+let hoverWrist = null;
+let dwellStartTime = 0;
+let dwellProgress = 0;
+let activeInstructionText = "select a sound";
+let lastClapTime = 0;
+let clapCooldown = 700;
+let isClapActive = false;
+let previousWristDistance = null;
+let previousWristDistanceAt = 0;
+let bodyLeftWrist = null;
+let bodyRightWrist = null;
+let bodyLeftShoulder = null;
+let bodyRightShoulder = null;
+let smoothedBodyLeftWrist = null;
+let smoothedBodyRightWrist = null;
+let smoothedBodyLeftShoulder = null;
+let smoothedBodyRightShoulder = null;
 
 let audioEngine;
 let loopManager;
@@ -37,6 +64,20 @@ let audioModulationEnabled = true;
 let pendingAudioEvents = [];
 let pendingSampleLoopEvent = null;
 let lastLiveDroneAt = 0;
+let lastLiveLeadAt = 0;
+let selectedDroneChordIndex = 0;
+let lastLivePercussionAt = 0;
+let lastLiveClickAt = 0;
+let lastGestureEvents = {};
+let percussionSubdivisionValue = 0.45;
+let percussionDensityValue = 0.32;
+let clickPatternValue = 0.35;
+let clickDensityValue = 0.3;
+let clickHarmonyValue = 0.45;
+let leadInstabilityValue = 0.2;
+let leadSpeedValue = 0;
+let lastLeadPoint = null;
+let lastLeadPointAt = 0;
 
 const canvasW = 1048;
 const canvasH = 756;
@@ -48,8 +89,28 @@ const parameterRecordInterval = 70;
 const loopLifetimeCycles = 5;
 const fingerModeSwitchFrames = 8;
 const fingerModeMissingFrames = 15;
+const instructionBarHeight = 16;
+const modeButtonHeight = 16;
+const modeDwellDuration = 1500;
+const performanceTop = instructionBarHeight + modeButtonHeight;
+const modeActivationHitHeight = 96;
+const sampleGridTop = performanceTop + 72;
 
 const processOrder = ["loopCreator", "motion", "texture", "space", "decay"];
+const modeButtons = [
+  { mode: "click", key: "texture" },
+  { mode: "percussion", key: "motion" },
+  { mode: "drone", key: "loopCreator" },
+  { mode: "lead", key: "space" },
+  { mode: "sample", key: "decay" },
+];
+const modeToProcessKey = {
+  drone: "loopCreator",
+  percussion: "motion",
+  click: "texture",
+  lead: "space",
+  sample: "decay",
+};
 
 const processNames = {
   loopCreator: "1 Finger / Drone Chord",
@@ -109,7 +170,13 @@ const chordBank = [
   ["G2", "D3", "Bb3"],
   ["Bb2", "F3", "C4"],
 ];
-const rhythmSubdivisions = [1, 2, 4, 8, 16];
+const droneChordBank = [
+  ["C2", "G2", "D3", "Eb3"],
+  ["A2", "E3", "G3", "C4"],
+  ["F2", "C3", "G3", "A3"],
+  ["Eb2", "Bb2", "D3", "G3"],
+];
+const rhythmSubdivisions = [1, 2, 3, 4, 6, 8];
 const samplePaths = [
   "sounds/Female-Evil-Laugh.wav",
   "sounds/Lakker-Tuk-tuk.mp3",
@@ -118,17 +185,21 @@ const samplePaths = [
   "sounds/SR006F.wav",
   "sounds/Scratching-Strings.wav",
   "sounds/Thats-My-Laugh.wav",
+  "sounds/aoaoa.mp3",
+  "sounds/climax1.mp3",
+  "sounds/oh-so.mp3",
+  "sounds/sample1.mp3",
   "sounds/text/Balkan-Central-Europe.mp3",
-  "sounds/text/Bjork-Interview-1996.mp3",
-  "sounds/text/Cyberstress.mp3",
   "sounds/text/Hello-MyNameIsBjork.mp3",
+  "sounds/text/Cyberstress.mp3",
+  "sounds/text/Bjork-Interview-1996.mp3",
   "sounds/text/Jodie-Foster-Gay-Silence.mp3",
   "sounds/text/KeroKeroBonito-I'dRatherSleep.mp3",
   "sounds/text/MakeMeMoo-TheResidents.mp3",
   "sounds/text/Weirdcore-Analysis.mp3",
   "sounds/text/YungLean-Hurt.mp3",
 ];
-const sampleGridCols = 4;
+const sampleGridCols = 5;
 const sampleGridRows = 4;
 let selectedNote = "C3";
 let selectedFilter = 0.5;
@@ -217,6 +288,45 @@ function draw() {
   }
 }
 
+function startBodyPoseWhenReady() {
+  if (bodyPoseStarted || !video) return;
+  if (typeof ml5 === "undefined" || typeof ml5.bodyPose !== "function") {
+    bodyPoseError = "body tracking library is loading";
+    activeInstructionText = "body tracking loading";
+    return;
+  }
+  if (!bodyPose && !bodyPoseLoading) {
+    bodyPoseLoading = true;
+    try {
+      bodyPose = ml5.bodyPose("MoveNet", { modelType: "SINGLEPOSE_LIGHTNING", flipped: true }, () => {
+        bodyPoseLoading = false;
+        bodyPoseError = "";
+      });
+    } catch (error) {
+      bodyPoseLoading = false;
+      bodyPoseError = error.message || "body tracking failed";
+      console.error(error);
+      return;
+    }
+  }
+  if (!bodyPose || bodyPoseLoading || !video.elt || typeof bodyPose.detectStart !== "function") {
+    activeInstructionText = bodyPoseLoading ? "body tracking loading" : "body tracking starting";
+    return;
+  }
+  bodyPoseStarted = true;
+  try {
+    bodyPose.detectStart(video.elt, handleBodyPoseResults);
+  } catch (error) {
+    bodyPoseStarted = false;
+    bodyPoseError = error.message || "body tracking failed";
+    console.error(error);
+  }
+}
+
+function handleBodyPoseResults(results) {
+  bodyPoses = Array.isArray(results) ? results : [];
+}
+
 function startHandTrackingWhenReady() {
   if (handPoseStarted || !video) return;
   if (typeof Hands === "undefined") {
@@ -283,22 +393,27 @@ function handleMediaPipeHands(results) {
 }
 
 function drawFrame() {
-  const sorted = HandTracker.getSinglePerformerHands(hands);
-  const handRoles = HandTracker.getPerformanceHands(sorted);
-  const leftHand = handRoles.leftHand;
-  const rightHand = handRoles.rightHand;
-  const activeFinger = handRoles.activeFinger;
-  const gesturePoint = getGestureSpatialPoint(leftHand, activeFinger, rightHand);
+  const body = BodyPoseTracker.getPrimaryPose(bodyPoses);
+  updateBodyPosePoints(body);
+  const trackedHands = HandTracker.getPerformanceHands(HandTracker.getSinglePerformerHands(hands));
+  const menuPoint = getHandControlPoint(trackedHands.rightHand) || getHandControlPoint(trackedHands.leftHand) || bodyRightWrist || bodyLeftWrist;
+  updateModeDwellSelection(menuPoint);
+  const leftHand = trackedHands.leftHand || createBodyHand(bodyLeftWrist, bodyLeftShoulder, "Left");
+  const rightHand = trackedHands.rightHand || createBodyHand(bodyRightWrist, bodyRightShoulder, "Right");
+  const activeFinger = createModeGesture(activeMode, bodyRightWrist || bodyLeftWrist);
+  const gesturePoint = getBodyPerformancePoint(activeMode, bodyLeftWrist, bodyRightWrist) || (activeFinger ? activeFinger.point : null);
   audioAnalysis = readAudioAnalysis();
 
-  if (!audioReady && !audioStarting && activeFinger && millis() - lastAudioStartAttempt > 250) {
+  if (!audioReady && !audioStarting && (activeMode || bodyRightWrist || bodyLeftWrist) && millis() - lastAudioStartAttempt > 250) {
     startAudioFromHands();
   }
 
-  const leftOpenPalmActive = handleLeftOpenPalmStop(leftHand);
+  const leftOpenPalmActive = false;
 
   activeProcessKey = activeFinger ? activeFinger.processKey : null;
-  rightPinchActive = GestureDetector.isThumbIndexPinch(rightHand);
+  const visualGesturePoint = activeProcessKey === "loopCreator" ? bodyRightWrist : gesturePoint;
+  rightPinchActive = detectClap(bodyLeftWrist, bodyRightWrist, bodyLeftShoulder, bodyRightShoulder);
+  if (rightPinchActive) handleClap(activeMode, rightHand, leftHand);
   if (activeProcessKey && !rightPinchActive) {
     lastPerformingProcessKey = activeProcessKey;
   }
@@ -310,8 +425,7 @@ function drawFrame() {
   updateProcessTargets(rightHand);
   if (!leftOpenPalmActive) {
     updateControlAxes(leftHand, rightHand, activeFinger);
-    updateSampleGrid(rightHand, activeFinger);
-    handlePinchTrigger(rightHand, leftHand);
+    updateSampleGrid(leftHand, rightHand, activeFinger);
     recordActiveProcessParams();
     updateAudioSafely(gesturePoint);
   }
@@ -319,21 +433,20 @@ function drawFrame() {
 
   const loopingSampleCell = getLoopingSampleGridCell();
   const sampleGridVisible = (activeProcessKey === "decay" && activeFinger && activeFinger.count === 5) || loopingSampleCell !== null;
-  const sampleGridPoint = getSampleGridPoint(rightHand, activeFinger);
-  visualSystem.update(activeProcessKey, layers, audioAnalysis, gesturePoint, activeFinger);
+  const sampleGridPoint = getSampleGridPoint(rightHand, activeFinger) || getSampleGridPoint(leftHand, activeFinger);
+  visualSystem.update(activeProcessKey, layers, audioAnalysis, visualGesturePoint, activeFinger);
   visualSystem.drawBackground(sampleGridVisible);
   if (!activeProcessKey || activeProcessKey === "loopCreator" || activeProcessKey === "motion") {
     visualSystem.drawAudioReactiveLayer(audioAnalysis);
-    visualSystem.drawHands(sorted, activeFinger, leftHand);
-    visualSystem.drawTrackingStatus(sorted, activeFinger);
-    visualSystem.drawGestureInstruction(activeFinger);
+    drawBodyPosePoints();
+    drawBodyModeInterface();
     return;
   }
   visualSystem.drawSampleGrid(sampleGridVisible, sampleGridPoint);
   visualSystem.drawAudioReactiveLayer(audioAnalysis);
   visualSystem.drawParticles();
-  visualSystem.drawHands(sorted, activeFinger, leftHand);
-  visualSystem.drawGestureInstruction(activeFinger);
+  drawBodyPosePoints();
+  drawBodyModeInterface();
 }
 
 function readAudioAnalysis() {
@@ -356,6 +469,327 @@ function readAudioAnalysis() {
   }
 }
 
+function updateBodyPosePoints(pose) {
+  const hasHandPoints = updateBodyPosePointsFromHands();
+  if (!hasHandPoints) {
+    bodyLeftWrist = smoothBodyPoint("leftWrist", BodyPoseTracker.getKeypoint(pose, "left_wrist"));
+    bodyRightWrist = smoothBodyPoint("rightWrist", BodyPoseTracker.getKeypoint(pose, "right_wrist"));
+    bodyLeftShoulder = smoothBodyPoint("leftShoulder", BodyPoseTracker.getKeypoint(pose, "left_shoulder"));
+    bodyRightShoulder = smoothBodyPoint("rightShoulder", BodyPoseTracker.getKeypoint(pose, "right_shoulder"));
+  }
+  if (!bodyLeftWrist && !bodyRightWrist) {
+    if (!handPoseStarted || handPoseLoading) activeInstructionText = "hand tracking loading";
+    if (handPoseError) activeInstructionText = handPoseError;
+  }
+}
+
+function smoothBodyPoint(slot, point) {
+  if (!isFinitePoint(point)) {
+    setSmoothedBodyPoint(slot, null);
+    return null;
+  }
+  const previous = getSmoothedBodyPoint(slot);
+  const amount = slot.includes("Wrist") ? 0.42 : 0.24;
+  const smoothed = isFinitePoint(previous) ? lerpPoint(previous, point, amount) : { x: point.x, y: point.y, confidence: point.confidence };
+  smoothed.confidence = point.confidence;
+  setSmoothedBodyPoint(slot, smoothed);
+  return smoothed;
+}
+
+function getSmoothedBodyPoint(slot) {
+  if (slot === "leftWrist") return smoothedBodyLeftWrist;
+  if (slot === "rightWrist") return smoothedBodyRightWrist;
+  if (slot === "leftShoulder") return smoothedBodyLeftShoulder;
+  if (slot === "rightShoulder") return smoothedBodyRightShoulder;
+  return null;
+}
+
+function setSmoothedBodyPoint(slot, point) {
+  if (slot === "leftWrist") smoothedBodyLeftWrist = point;
+  if (slot === "rightWrist") smoothedBodyRightWrist = point;
+  if (slot === "leftShoulder") smoothedBodyLeftShoulder = point;
+  if (slot === "rightShoulder") smoothedBodyRightShoulder = point;
+}
+
+function updateBodyPosePointsFromHands() {
+  const sorted = HandTracker.getSinglePerformerHands(hands);
+  const roles = HandTracker.getPerformanceHands(sorted);
+  const left = roles.leftHand;
+  const right = roles.rightHand;
+  let foundHand = false;
+  if (HandTracker.isValidHand(left)) {
+    const leftPoint = getHandControlPoint(left);
+    bodyLeftWrist = smoothBodyPoint("leftWrist", leftPoint);
+    bodyLeftShoulder = smoothBodyPoint("leftShoulder", { x: constrain(bodyLeftWrist.x - width * 0.16, 0, width), y: constrain(bodyLeftWrist.y + height * 0.22, 0, height) });
+    foundHand = true;
+  } else {
+    bodyLeftWrist = smoothBodyPoint("leftWrist", null);
+    bodyLeftShoulder = smoothBodyPoint("leftShoulder", null);
+  }
+  if (HandTracker.isValidHand(right)) {
+    const rightPoint = getHandControlPoint(right);
+    bodyRightWrist = smoothBodyPoint("rightWrist", rightPoint);
+    bodyRightShoulder = smoothBodyPoint("rightShoulder", { x: constrain(bodyRightWrist.x + width * 0.16, 0, width), y: constrain(bodyRightWrist.y + height * 0.22, 0, height) });
+    foundHand = true;
+  } else {
+    bodyRightWrist = smoothBodyPoint("rightWrist", null);
+    bodyRightShoulder = smoothBodyPoint("rightShoulder", null);
+  }
+  if ((bodyLeftWrist || bodyRightWrist) && (!bodyPoseStarted || bodyPoseLoading || bodyPoseError)) {
+    activeInstructionText = activeMode ? activeMode + " active / clap to loop" : "select a sound";
+  }
+  return foundHand;
+}
+
+function getHandControlPoint(hand) {
+  if (!HandTracker.isValidHand(hand)) return null;
+  const indexTip = hand.keypoints[fingerTips.index];
+  if (isFinitePoint(indexTip)) return indexTip;
+  const anchors = [hand.keypoints[0], hand.keypoints[5], hand.keypoints[9], hand.keypoints[13], hand.keypoints[17]].filter(isFinitePoint);
+  if (!anchors.length) return null;
+  const total = anchors.reduce((sum, point) => ({ x: sum.x + point.x, y: sum.y + point.y }), { x: 0, y: 0 });
+  return { x: total.x / anchors.length, y: total.y / anchors.length, confidence: hand.confidence || 1 };
+}
+
+function updateModeDwellSelection(wrist) {
+  const hovered = getHoveredModeBox(wrist);
+  hoverWrist = wrist;
+  if (!hovered) {
+    candidateMode = null;
+    dwellStartTime = 0;
+    dwellProgress = 0;
+    if (!activeMode) activeInstructionText = "select a sound";
+    else activeInstructionText = activeMode + " active / clap to loop";
+    return;
+  }
+
+  if (candidateMode !== hovered.mode) {
+    candidateMode = hovered.mode;
+    dwellStartTime = millis();
+    dwellProgress = 0;
+  }
+
+  dwellProgress = constrain((millis() - dwellStartTime) / modeDwellDuration, 0, 1);
+  const remaining = max(1, ceil((modeDwellDuration - (millis() - dwellStartTime)) / 1000));
+  activeInstructionText = "loading... " + remaining;
+
+  if (dwellProgress >= 1) activateMode(candidateMode);
+}
+
+function getHoveredModeBox(wrist) {
+  if (!isFinitePoint(wrist)) return null;
+  if (wrist.y < 0 || wrist.y > modeActivationHitHeight) return null;
+  const index = floor(constrain(map(wrist.x, 0, width, 0, modeButtons.length), 0, modeButtons.length - 0.001));
+  return modeButtons[index];
+}
+
+function activateMode(mode) {
+  if (!mode || !modeToProcessKey[mode]) return;
+  const nextKey = modeToProcessKey[mode];
+  const previousKey = activeProcessKey;
+  if (previousKey && previousKey !== nextKey) autoCaptureModeOnExit(previousKey);
+  activeMode = mode;
+  activeProcessKey = nextKey;
+  candidateMode = null;
+  dwellStartTime = 0;
+  dwellProgress = 0;
+  activeInstructionText = mode + " activated";
+  if (activeProcessKey === "loopCreator") lastLiveDroneAt = -Infinity;
+  if (activeProcessKey === "space") lastLiveLeadAt = -Infinity;
+  if (activeProcessKey === "motion") lastLivePercussionAt = -Infinity;
+  if (activeProcessKey === "texture") lastLiveClickAt = -Infinity;
+  if (!audioReady && !audioStarting) startAudioFromHands();
+}
+
+function autoCaptureModeOnExit(key) {
+  if (!["loopCreator", "motion", "texture", "space"].includes(key)) return;
+  const event = lastGestureEvents[key];
+  if (!event) return;
+  storeGestureLoop(key, event, true);
+  activeInstructionText = key === "loopCreator" ? "drone remembered" : key === "motion" ? "percussion remembered" : key === "texture" ? "click remembered" : "lead remembered";
+}
+
+function detectClap(leftWrist, rightWrist, leftShoulder, rightShoulder) {
+  if (!isFinitePoint(leftWrist) || !isFinitePoint(rightWrist)) {
+    previousWristDistance = null;
+    isClapActive = false;
+    return false;
+  }
+  const now = millis();
+  const wristDistance = dist(leftWrist.x, leftWrist.y, rightWrist.x, rightWrist.y);
+  const shoulderWidth = isFinitePoint(leftShoulder) && isFinitePoint(rightShoulder)
+    ? dist(leftShoulder.x, leftShoulder.y, rightShoulder.x, rightShoulder.y)
+    : width * 0.28;
+  const closeThreshold = max(24, shoulderWidth * 0.42);
+  const apartThreshold = max(42, shoulderWidth * 0.72);
+  const previous = previousWristDistance;
+  const elapsed = max(16, now - (previousWristDistanceAt || now));
+  const closingSpeed = previous !== null ? (previous - wristDistance) / elapsed : 0;
+  previousWristDistance = wristDistance;
+  previousWristDistanceAt = now;
+
+  if (wristDistance > apartThreshold) {
+    isClapActive = false;
+    return false;
+  }
+  if (wristDistance < closeThreshold && !isClapActive && now - lastClapTime > clapCooldown && (previous === null || previous > apartThreshold || closingSpeed > 0.24)) {
+    isClapActive = true;
+    lastClapTime = now;
+    activeInstructionText = activeMode ? "clap: " + activeMode : "select a mode first";
+    return true;
+  }
+  return false;
+}
+
+function handleClap(mode, rightHand, leftHand) {
+  if (!mode || !modeToProcessKey[mode]) return;
+  if (!audioReady && !audioStarting) startAudioFromHands();
+  const key = modeToProcessKey[mode];
+  if (key === "space" || key === "loopCreator" || key === "motion" || key === "texture") {
+    activeInstructionText = key === "space" ? "lead is live only" : mode + " remembers on exit";
+    return;
+  }
+  if (key === "decay") {
+    triggerSelectedSampleLoopMemory(rightHand, leftHand);
+  } else {
+    triggerSelectedNote(rightHand, leftHand, key);
+  }
+  activeInstructionText = mode + " loop stored";
+}
+
+function createModeGesture(mode, point) {
+  if (!mode || !modeToProcessKey[mode] || !isFinitePoint(point)) return null;
+  const index = modeButtons.findIndex((item) => item.mode === mode);
+  const count = max(1, index + 1);
+  return {
+    key: mode,
+    count,
+    openFingers: [mode],
+    processKey: modeToProcessKey[mode],
+    point,
+    points: [{ key: mode, point }],
+  };
+}
+
+function createBodyHand(wrist, shoulder, label) {
+  if (!isFinitePoint(wrist)) return null;
+  const scale = isFinitePoint(shoulder) ? max(42, dist(wrist.x, wrist.y, shoulder.x, shoulder.y) * 0.32) : 54;
+  const keypoints = [];
+  for (let i = 0; i < 21; i++) keypoints.push({ x: wrist.x, y: wrist.y, z: 0 });
+  keypoints[0] = { x: wrist.x, y: wrist.y, z: 0 };
+  keypoints[8] = { x: wrist.x, y: wrist.y, z: 0 };
+  keypoints[4] = { x: wrist.x + (label === "Left" ? -scale * 0.2 : scale * 0.2), y: wrist.y, z: 0 };
+  keypoints[9] = { x: wrist.x, y: wrist.y - scale, z: 0 };
+  keypoints[12] = { x: wrist.x, y: wrist.y - scale * 0.8, z: 0 };
+  keypoints[16] = { x: wrist.x, y: wrist.y - scale * 0.55, z: 0 };
+  keypoints[20] = { x: wrist.x, y: wrist.y - scale * 0.3, z: 0 };
+  return { handedness: label, confidence: 1, keypoints, bodyWrist: true };
+}
+
+function getBodyPerformancePoint(mode, leftWrist, rightWrist) {
+  if (mode === "drone") return rightWrist || leftWrist;
+  if (mode === "sample") return rightWrist || leftWrist;
+  if (mode === "lead") return rightWrist || leftWrist;
+  if (isFinitePoint(leftWrist) && isFinitePoint(rightWrist)) return { x: (leftWrist.x + rightWrist.x) * 0.5, y: (leftWrist.y + rightWrist.y) * 0.5 };
+  return rightWrist || leftWrist;
+}
+
+function drawBodyModeInterface() {
+  noStroke();
+  fill(0, 245);
+  rect(0, 0, width, performanceTop);
+  drawInstructionBar();
+  drawModeButtons();
+}
+
+function drawInstructionBar() {
+  noStroke();
+  fill(218);
+  const boxW = min(width * 0.46, 480);
+  const boxX = (width - boxW) * 0.5;
+  rect(boxX, 0, boxW, instructionBarHeight);
+  fill(0);
+  textAlign(CENTER, CENTER);
+  textSize(7.5);
+  const label = activeInstructionText || "select a sound";
+  push();
+  drawingContext.save();
+  drawingContext.beginPath();
+  drawingContext.rect(boxX + 3, 0, boxW - 6, instructionBarHeight);
+  drawingContext.clip();
+  text(label, boxX + 5, 0, boxW - 10, instructionBarHeight);
+  drawingContext.restore();
+  pop();
+  textAlign(LEFT, BASELINE);
+}
+
+function drawModeButtons() {
+  const y = instructionBarHeight;
+  const boxW = width / modeButtons.length;
+  stroke(180, 120);
+  strokeWeight(0.7);
+  textAlign(CENTER, CENTER);
+  textSize(8);
+  for (let i = 0; i < modeButtons.length; i++) {
+    const item = modeButtons[i];
+    const x = i * boxW;
+    if (activeMode === item.mode) {
+      noStroke();
+      fill(126);
+      rect(x, y, boxW, modeButtonHeight);
+    } else {
+      noFill();
+    }
+    stroke(180, 120);
+    rect(x, y, boxW, modeButtonHeight);
+    if (candidateMode === item.mode && dwellProgress > 0) {
+      noStroke();
+      fill(218, 180);
+      rect(x, y, boxW * dwellProgress, modeButtonHeight);
+    }
+    noStroke();
+    fill(activeMode === item.mode || (candidateMode === item.mode && dwellProgress > 0) ? 0 : 190);
+    text(item.mode, x + boxW / 2, y + modeButtonHeight / 2);
+  }
+  textAlign(LEFT, BASELINE);
+}
+
+function drawBodyPosePoints() {
+  noStroke();
+  if (isFinitePoint(bodyLeftWrist)) {
+    drawHandEchoPoint(bodyLeftWrist, getHandMarkerColor("left"), 0);
+  }
+  if (isFinitePoint(bodyRightWrist)) {
+    drawHandEchoPoint(bodyRightWrist, getHandMarkerColor("right"), 1.7);
+  }
+}
+
+function getHandMarkerColor(side) {
+  if (activeProcessKey === "space") return color(255, 36, 30);
+  if (activeProcessKey === "texture" && side === "left") return color(35, 112, 255);
+  if (side === "left") return color(35, 112, 255);
+  return color(255, 214, 26);
+}
+
+function drawHandEchoPoint(point, pointColor, phase) {
+  const pulse = (sin(frameCount * 0.18 + phase) + 1) * 0.5;
+  noFill();
+  for (let echo = 0; echo < 4; echo++) {
+    stroke(red(pointColor), green(pointColor), blue(pointColor), 142 - echo * 27);
+    strokeWeight(max(0.7, 1.9 - echo * 0.24));
+    beginShape();
+    const radius = 14 + echo * 13 + pulse * 7;
+    for (let a = 0; a <= TWO_PI + 0.14; a += 0.2) {
+      const wobble = (noise(cos(a) + phase, sin(a) + echo, frameCount * 0.012) - 0.5) * (8 + echo * 3);
+      vertex(point.x + cos(a) * (radius + wobble), point.y + sin(a) * (radius + wobble));
+    }
+    endShape(CLOSE);
+  }
+  noStroke();
+  fill(red(pointColor), green(pointColor), blue(pointColor), 230);
+  circle(point.x, point.y, 7 + pulse * 2);
+}
+
 function updateAudioSafely(gesturePoint) {
   if (!audioReady || !audioEngine || !audioModulationEnabled) return;
   try {
@@ -363,6 +797,9 @@ function updateAudioSafely(gesturePoint) {
     audioEngine.updateFromLayers(layers);
     audioEngine.setSpatialPosition(gesturePoint);
     updateLiveOneFingerDrone();
+    updateLivePercussion();
+    updateLiveClickPattern();
+    updateLiveLead();
   } catch (error) {
     audioModulationEnabled = false;
     systemMessage = "audio running without continuous modulation";
@@ -370,10 +807,48 @@ function updateAudioSafely(gesturePoint) {
   }
 }
 
+function updateLiveLead() {
+  if (activeProcessKey !== "space" || millis() - lastLiveLeadAt < max(70, 190 - leadSpeedValue * 95)) return;
+  const rightHand = createBodyHand(bodyRightWrist || bodyLeftWrist, bodyRightShoulder || bodyLeftShoulder, "Right");
+  const leftHand = createBodyHand(bodyLeftWrist, bodyLeftShoulder, "Left");
+  if (!rightHand) return;
+  const event = createGestureEvent("space", rightHand, leftHand);
+  lastGestureEvents.space = event;
+  audioEngine.playGestureEvent(event, Tone.now(), 0.72);
+  visualSystem.createEventParticle(event);
+  lastLiveLeadAt = millis();
+}
+
+function updateLivePercussion() {
+  if (activeProcessKey !== "motion" || millis() - lastLivePercussionAt < 320) return;
+  const rightHand = createBodyHand(bodyRightWrist || bodyLeftWrist, bodyRightShoulder || bodyLeftShoulder, "Right");
+  const leftHand = createBodyHand(bodyLeftWrist, bodyLeftShoulder, "Left");
+  if (!rightHand && !leftHand) return;
+  const event = createGestureEvent("motion", rightHand, leftHand);
+  lastGestureEvents.motion = event;
+  audioEngine.playGestureEvent({ ...event, probability: 1, accent: false, velocity: event.velocity * 0.72 }, Tone.now(), 0.68);
+  visualSystem.createEventParticle(event);
+  lastLivePercussionAt = millis();
+}
+
+function updateLiveClickPattern() {
+  if (activeProcessKey !== "texture" || millis() - lastLiveClickAt < 210) return;
+  const rightHand = createBodyHand(bodyRightWrist || bodyLeftWrist, bodyRightShoulder || bodyLeftShoulder, "Right");
+  const leftHand = createBodyHand(bodyLeftWrist, bodyLeftShoulder, "Left");
+  if (!rightHand && !leftHand) return;
+  const event = createGestureEvent("texture", rightHand, leftHand);
+  lastGestureEvents.texture = event;
+  audioEngine.playGestureEvent({ ...event, velocity: event.velocity * 0.78 }, Tone.now(), 0.62);
+  visualSystem.createEventParticle(event);
+  lastLiveClickAt = millis();
+}
+
 function updateLiveOneFingerDrone() {
   if (activeProcessKey !== "loopCreator" || millis() - lastLiveDroneAt < 620) return;
-  const rightHand = HandTracker.getHandBySide(HandTracker.getSinglePerformerHands(hands), "Right", 1) || HandTracker.getSinglePerformerHands(hands)[0];
+  const rightHand = createBodyHand(bodyRightWrist || bodyLeftWrist, bodyRightShoulder || bodyLeftShoulder, "Right");
+  if (!rightHand) return;
   const event = createGestureEvent("loopCreator", rightHand, null);
+  lastGestureEvents.loopCreator = event;
   event.velocity = constrain(map(selectedFilter, 0, 1, 0.28, 0.76), 0.22, 0.82);
   audioEngine.playGestureEvent(event, Tone.now(), 0.82);
   lastLiveDroneAt = millis();
@@ -588,6 +1063,22 @@ function updateFreezeLogic(activeFinger, leftHand) {
 }
 
 function updateControlAxes(leftHand, rightHand, activeFinger) {
+  if (activeProcessKey === "loopCreator") {
+    updateDroneTwoHandControls(leftHand, rightHand);
+    return;
+  }
+  if (activeProcessKey === "motion") {
+    updatePercussionTwoHandControls(leftHand, rightHand);
+    return;
+  }
+  if (activeProcessKey === "texture") {
+    updateClickTwoHandControls(leftHand, rightHand);
+    return;
+  }
+  if (activeProcessKey === "space") {
+    updateLeadTwoHandControls(leftHand, rightHand);
+    return;
+  }
   const point = getAxisControlPoint(activeProcessKey, leftHand, rightHand, activeFinger);
   if (!isFinitePoint(point)) return;
 
@@ -597,7 +1088,105 @@ function updateControlAxes(leftHand, rightHand, activeFinger) {
   selectedSampleIndex = getSampleGridIndex(point);
 }
 
+function updatePercussionTwoHandControls(leftHand, rightHand) {
+  const leftPoint = getHandControlPoint(leftHand) || getIndexPoint(leftHand);
+  const rightPoint = getHandControlPoint(rightHand) || getIndexPoint(rightHand);
+  const rhythmPoint = leftPoint || rightPoint;
+  const soundPoint = rightPoint || leftPoint;
+  if (isFinitePoint(rhythmPoint)) {
+    percussionSubdivisionValue = constrain(map(rhythmPoint.x, 0, width, 0, 1), 0, 1);
+    percussionDensityValue = constrain(map(rhythmPoint.y, height, performanceTop, 0, 1), 0, 1);
+  }
+  if (isFinitePoint(soundPoint)) {
+    selectedFilter = constrain(map(soundPoint.x, width * 0.08, width * 0.92, 0, 1), 0, 1);
+    const noteIndex = floor(constrain(map(soundPoint.y, height * 0.92, performanceTop + 4, 0, fixedScale.length), 0, fixedScale.length - 0.001));
+    selectedNote = fixedScale[noteIndex];
+  }
+  const layer = layers.motion;
+  layer.target.density = constrain(0.12 + percussionDensityValue * 0.78, 0.08, 0.92);
+  layer.target.variation = constrain(0.08 + percussionSubdivisionValue * 0.72, 0.08, 0.82);
+  layer.target.depth = selectedFilter;
+  layer.target.chance = constrain(0.08 + percussionDensityValue * 0.38, 0.06, 0.48);
+}
+
+function updateClickTwoHandControls(leftHand, rightHand) {
+  const leftPoint = getHandControlPoint(leftHand) || getIndexPoint(leftHand);
+  const rightPoint = getHandControlPoint(rightHand) || getIndexPoint(rightHand);
+  const patternPoint = leftPoint || rightPoint;
+  const texturePoint = rightPoint || leftPoint;
+  if (isFinitePoint(patternPoint)) {
+    clickPatternValue = constrain(map(patternPoint.x, 0, width, 0, 1), 0, 1);
+    clickDensityValue = constrain(map(patternPoint.y, height, performanceTop, 0, 1), 0, 1);
+  }
+  if (isFinitePoint(texturePoint)) {
+    clickHarmonyValue = constrain(map(texturePoint.x, 0, width, 0, 1), 0, 1);
+    selectedFilter = constrain(map(texturePoint.y, height, performanceTop, 0.08, 1), 0.08, 1);
+    const noteIndex = floor(constrain(map(texturePoint.x, 0, width, 0, fixedScale.length), 0, fixedScale.length - 0.001));
+    selectedNote = fixedScale[noteIndex];
+  }
+  const layer = layers.texture;
+  layer.target.density = constrain(0.1 + clickDensityValue * 0.82, 0.08, 0.95);
+  layer.target.variation = constrain(0.08 + clickPatternValue * 0.78, 0.08, 0.9);
+  layer.target.depth = selectedFilter;
+  layer.target.chance = constrain(0.04 + clickDensityValue * 0.32, 0.03, 0.42);
+}
+
+function updateLeadTwoHandControls(leftHand, rightHand) {
+  const leftPoint = getHandControlPoint(leftHand) || getIndexPoint(leftHand);
+  const rightPoint = getHandControlPoint(rightHand) || getIndexPoint(rightHand);
+  if (isFinitePoint(rightPoint)) {
+    const region = constrain(map(rightPoint.x, 0, width, -2, 3), -2, 3);
+    const noteIndex = floor(constrain(map(rightPoint.y, height * 0.94, performanceTop + 4, 0, fixedScale.length), 0, fixedScale.length - 0.001));
+    selectedNote = transposeNoteOctaves(fixedScale[noteIndex], floor(region * 0.5));
+    const now = millis();
+    if (lastLeadPoint && lastLeadPointAt) {
+      const elapsed = max(16, now - lastLeadPointAt);
+      leadSpeedValue = constrain(dist(rightPoint.x, rightPoint.y, lastLeadPoint.x, lastLeadPoint.y) / elapsed * 0.18, 0, 1);
+    }
+    lastLeadPoint = { x: rightPoint.x, y: rightPoint.y };
+    lastLeadPointAt = now;
+  }
+  if (isFinitePoint(leftPoint)) {
+    selectedFilter = constrain(map(leftPoint.y, height, performanceTop, 0.08, 1), 0.08, 1);
+    leadInstabilityValue = constrain(map(leftPoint.x, 0, width, 0, 1), 0, 1);
+  }
+  const layer = layers.space;
+  layer.target.density = constrain(0.16 + leadSpeedValue * 0.62, 0.1, 0.82);
+  layer.target.variation = constrain(0.08 + leadInstabilityValue * 0.72, 0.08, 0.9);
+  layer.target.depth = selectedFilter;
+  layer.target.chance = constrain(0.04 + leadSpeedValue * 0.4 + leadInstabilityValue * 0.18, 0.04, 0.7);
+}
+
+function updateDroneTwoHandControls(leftHand, rightHand) {
+  const leftPoint = getHandControlPoint(leftHand) || getIndexPoint(leftHand);
+  const rightPoint = getHandControlPoint(rightHand) || getIndexPoint(rightHand);
+  const pitchPoint = rightPoint || leftPoint;
+  if (isFinitePoint(pitchPoint)) {
+    const noteIndex = floor(constrain(map(pitchPoint.y, height * 0.92, performanceTop + 4, 0, fixedScale.length), 0, fixedScale.length - 0.001));
+    selectedNote = fixedScale[noteIndex];
+  }
+  if (isFinitePoint(rightPoint)) {
+    selectedDroneChordIndex = floor(constrain(map(rightPoint.x, 0, width, 0, droneChordBank.length), 0, droneChordBank.length - 0.001));
+  }
+  if (isFinitePoint(leftPoint)) {
+    const rawFilter = constrain(map(leftPoint.y, height * 0.96, performanceTop, 0, 1), 0, 1);
+    selectedFilter = pow(rawFilter, 0.72);
+  }
+  const layer = layers.loopCreator;
+  if (!layer) return;
+  const rightX = isFinitePoint(rightPoint) ? constrain(map(rightPoint.x, 0, width, 0, 1), 0, 1) : 0.5;
+  const leftX = isFinitePoint(leftPoint) ? constrain(map(leftPoint.x, 0, width, 0, 1), 0, 1) : 0.35;
+  layer.target.depth = selectedFilter;
+  layer.target.variation = constrain(0.08 + leftX * 0.82, 0.08, 0.9);
+  layer.target.density = constrain(0.18 + rightX * 0.58, 0.12, 0.84);
+  layer.target.chance = constrain(0.04 + leftX * 0.54, 0.04, 0.62);
+}
+
 function getAxisControlPoint(key, leftHand, rightHand, activeFinger) {
+  if (key === "loopCreator") {
+    const leftIndex = getIndexPoint(leftHand);
+    if (leftIndex) return leftIndex;
+  }
   const rightIndex = getIndexPoint(rightHand);
   if (rightIndex) return rightIndex;
   if (activeFinger && isFinitePoint(activeFinger.point)) return activeFinger.point;
@@ -611,7 +1200,7 @@ function getSampleGridIndex(point) {
 function getSampleGridCell(point) {
   if (!isFinitePoint(point)) return 0;
   const col = floor(constrain(map(point.x, 0, width, 0, sampleGridCols), 0, sampleGridCols - 0.001));
-  const row = floor(constrain(map(point.y, 0, height, 0, sampleGridRows), 0, sampleGridRows - 0.001));
+  const row = floor(constrain(map(point.y, sampleGridTop, height, 0, sampleGridRows), 0, sampleGridRows - 0.001));
   return row * sampleGridCols + col;
 }
 
@@ -620,34 +1209,48 @@ function getSampleGridPoint(rightHand, activeFinger) {
   return getIndexPoint(rightHand);
 }
 
-function updateSampleGrid(rightHand, activeFinger) {
+function updateSampleGrid(leftHand, rightHand, activeFinger) {
   if (activeProcessKey !== "decay" || !activeFinger || activeFinger.count !== 5) {
     lastSampleGridCell = null;
-    if (sampleModeWasActive) selectedSampleGridCell = null;
+    if (sampleModeWasActive) {
+      selectedSampleGridCell = null;
+      selectedSampleGridCells = { left: null, right: null };
+      lastSampleGridCells = { left: null, right: null };
+    }
     sampleModeWasActive = false;
     return;
   }
   sampleModeWasActive = true;
 
-  const point = getSampleGridPoint(rightHand, activeFinger);
-  if (!isFinitePoint(point)) return;
+  updateSampleHandCell("left", leftHand);
+  updateSampleHandCell("right", rightHand);
+}
+
+function updateSampleHandCell(side, hand) {
+  const point = getSampleGridPoint(hand, { processKey: "decay" });
+  if (!isFinitePoint(point)) {
+    selectedSampleGridCells[side] = null;
+    return;
+  }
 
   const gridCell = getSampleGridCell(point);
   const cell = constrain(gridCell, 0, samplePaths.length - 1);
-  const shouldPlay = gridCell !== lastSampleGridCell;
+  const shouldPlay = gridCell !== lastSampleGridCells[side];
 
   selectedSampleIndex = cell;
   selectedSampleGridCell = gridCell;
+  selectedSampleGridCells[side] = gridCell;
   if (shouldPlay) {
+    lastSampleGridCells[side] = gridCell;
     lastSampleGridCell = gridCell;
     lastSampleGridAt = millis();
-    triggerSampleGridCell(point, cell, 1, gridCell);
+    lastSampleEvents[side] = triggerSampleGridCell(point, cell, 1, gridCell, side);
   }
 }
 
-function triggerSampleGridCell(point, cell, repeatCount = 1, gridCell = getSampleGridCell(point)) {
+function triggerSampleGridCell(point, cell, repeatCount = 1, gridCell = getSampleGridCell(point), handSide = "right") {
   if (!audioReady && !audioStarting) startAudioFromHands();
-  const event = createSampleEvent(point, cell, gridCell, repeatCount);
+  const event = createSampleEvent(point, cell, gridCell, repeatCount, handSide);
 
   visualSystem.createEventParticle(event);
   try {
@@ -659,17 +1262,19 @@ function triggerSampleGridCell(point, cell, repeatCount = 1, gridCell = getSampl
   return event;
 }
 
-function createSampleEvent(point, cell, gridCell, repeatCount = 1) {
+function createSampleEvent(point, cell, gridCell, repeatCount = 1, handSide = "right") {
+  const filterByY = constrain(map(point.y, height, sampleGridTop, 0.08, 1), 0.08, 1);
+  const textureByX = constrain(map(point.x, 0, width, 0, 1), 0, 1);
   return {
     time: loopManager ? loopManager.step / loopManager.loopLength : (millis() % parameterLoopLength) / parameterLoopLength,
     type: "sample",
     note: selectedNote,
     soundEngine: "decay",
-    filterValue: selectedFilter,
-    velocity: 0.48,
+    filterValue: filterByY,
+    velocity: handSide === "left" ? 0.54 : 0.6,
     duration: "8n",
     probability: 1,
-    texture: selectedFilter,
+    texture: textureByX,
     drift: 0,
     pan: getPanFromPoint(point),
     visualX: point.x,
@@ -677,6 +1282,9 @@ function createSampleEvent(point, cell, gridCell, repeatCount = 1) {
     sampleIndex: cell,
     gridCell,
     repeatCount,
+    handSide,
+    playbackRate: constrain(0.88 + textureByX * 0.24, 0.82, 1.16),
+    triggeredAt: millis(),
   };
 }
 
@@ -686,6 +1294,10 @@ function getIndexPoint(hand) {
 
 function getOpenFingerPoint(hand, key) {
   if (!HandTracker.isValidHand(hand)) return null;
+  if (hand.bodyWrist) {
+    const point = hand.keypoints[fingerTips[key]] || hand.keypoints[0];
+    return isFinitePoint(point) ? point : null;
+  }
   if (GestureDetector.getFingerOpenAmount(hand, key) <= 0.52) return null;
   const point = hand.keypoints[fingerTips[key]];
   return isFinitePoint(point) ? point : null;
@@ -722,7 +1334,7 @@ function stopAllAudio() {
   loopMemories = loopMemories.filter((memory) => memory.background);
   savedBlocks = savedBlocks.filter((block) => loopMemories.some((memory) => memory.id === block.id));
   for (const key of processOrder) {
-    if (key === "loopCreator" || key === "motion" || key === "texture") continue;
+    if (key === "loopCreator" || key === "motion" || key === "texture" || key === "space") continue;
     const layer = layers[key];
     if (!layer) continue;
     layer.saved = false;
@@ -764,11 +1376,8 @@ function handlePinchTrigger(rightHand, leftHand) {
 function triggerSelectedNote(rightHand, leftHand, key = activeProcessKey) {
   if (!key || key === "decay") return;
   if (!audioReady && !audioStarting) startAudioFromHands();
-  const isBackgroundLoop = key === "loopCreator" || key === "motion" || key === "texture";
   const event = createGestureEvent(key, rightHand, leftHand);
-  const shouldLoop = key !== "space";
-
-  if (!shouldLoop) {
+  if (key === "space") {
     visualSystem.createEventParticle(event);
     try {
       playOrQueueGestureEvent(event, 1);
@@ -779,37 +1388,51 @@ function triggerSelectedNote(rightHand, leftHand, key = activeProcessKey) {
     return;
   }
 
+  storeGestureLoop(key, event, true);
+}
+
+function storeGestureLoop(key, event, playImmediately = false) {
+  if (!key || !event || !["loopCreator", "motion", "texture", "space"].includes(key)) return;
+  if (key === "loopCreator") {
+    event = {
+      ...event,
+      filterValue: layers.loopCreator.params.depth,
+      texture: layers.loopCreator.params.variation,
+      velocity: constrain(map(layers.loopCreator.params.depth, 0, 1, 0.28, 0.78), 0.24, 0.82),
+    };
+  }
   const memory = {
     id: millis() + "-" + key,
     key,
     events: [event],
-    params: { ...layers[key].params, depth: selectedFilter },
+    params: { ...layers[key].params, depth: key === "loopCreator" ? layers.loopCreator.params.depth : selectedFilter },
     pattern: null,
     savedAt: millis(),
     cycleCount: 0,
-    maxCycles: isBackgroundLoop ? Infinity : loopLifetimeCycles,
+    maxCycles: Infinity,
     lastCycleStep: 0,
     fading: false,
-    background: isBackgroundLoop,
+    background: true,
   };
 
   if (key === "motion") memory.events = createRegularPercussionEvents(event);
   if (key === "texture") memory.events = createClickPatternEvents(event);
+  if (key === "space") memory.events = createLeadLoopEvents(event);
 
-  if (isBackgroundLoop) {
-    loopMemories = loopMemories.filter((item) => !(item.key === key && item.background));
-    savedBlocks = savedBlocks.filter((block) => !(block.key === key && block.background));
-  }
+  loopMemories = loopMemories.filter((item) => !(item.key === key && item.background));
+  savedBlocks = savedBlocks.filter((block) => !(block.key === key && block.background));
 
   loopMemories.push(memory);
   pruneLoopMemories();
   visualSystem.createSavedBlock(memory);
   visualSystem.createEventParticle({ ...event, loopMemoryId: memory.id });
-  try {
-    playOrQueueGestureEvent(key === "motion" ? { ...event, probability: 1 } : event, 1);
-  } catch (error) {
-    systemMessage = "audio event skipped, loop memory stored";
-    console.error(error);
+  if (playImmediately) {
+    try {
+      playOrQueueGestureEvent(key === "motion" ? { ...event, probability: 1 } : event, 1);
+    } catch (error) {
+      systemMessage = "audio event skipped, loop memory stored";
+      console.error(error);
+    }
   }
 }
 
@@ -824,16 +1447,27 @@ function triggerSelectedSample(rightHand) {
   triggerSampleGridCell(point, constrain(eventGridCell, 0, samplePaths.length - 1), 1, eventGridCell);
 }
 
-function triggerSelectedSampleLoopMemory(rightHand) {
+function triggerSelectedSampleLoopMemory(rightHand, leftHand = null) {
   if (activeProcessKey !== "decay") return;
-  const gridCell = selectedSampleGridCell !== null ? selectedSampleGridCell : lastSampleGridCell;
-  const indexPoint = getIndexPoint(rightHand);
+  const rightPoint = getIndexPoint(rightHand);
+  const leftPoint = getIndexPoint(leftHand);
+  let handSide = "right";
+  let gridCell = selectedSampleGridCells.right !== null ? selectedSampleGridCells.right : null;
+  let indexPoint = rightPoint;
+  const leftRecent = lastSampleEvents.left && millis() - lastSampleEvents.left.triggeredAt < 2200;
+  const rightRecent = lastSampleEvents.right && millis() - lastSampleEvents.right.triggeredAt < 2200;
+  if (selectedSampleGridCells.left !== null && (leftRecent || !rightRecent || (lastSampleEvents.left && lastSampleEvents.right && lastSampleEvents.left.triggeredAt > lastSampleEvents.right.triggeredAt))) {
+    handSide = "left";
+    gridCell = selectedSampleGridCells.left;
+    indexPoint = leftPoint;
+  }
+  if (gridCell === null) gridCell = selectedSampleGridCell !== null ? selectedSampleGridCell : lastSampleGridCell;
   const point = isFinitePoint(indexPoint) ? indexPoint : gridCell !== null ? getSampleGridCellCenter(gridCell) : null;
   if (!isFinitePoint(point)) return;
   if (!audioReady && !audioStarting) startAudioFromHands();
 
   const eventGridCell = gridCell !== null ? gridCell : getSampleGridCell(point);
-  const event = createSampleEvent(point, constrain(eventGridCell, 0, samplePaths.length - 1), eventGridCell, 1);
+  const event = createSampleEvent(point, constrain(eventGridCell, 0, samplePaths.length - 1), eventGridCell, 1, handSide);
   const memory = {
     id: millis() + "-decay",
     key: "decay",
@@ -883,7 +1517,7 @@ function toggleSelectedSampleLoop() {
 function getSampleGridCellCenter(cell) {
   return {
     x: (cell % sampleGridCols + 0.5) * width / sampleGridCols,
-    y: (floor(cell / sampleGridCols) % sampleGridRows + 0.5) * height / sampleGridRows,
+    y: sampleGridTop + (floor(cell / sampleGridCols) % sampleGridRows + 0.5) * (height - sampleGridTop) / sampleGridRows,
   };
 }
 
@@ -922,24 +1556,37 @@ function createGestureEvent(engineKey, rightHand, leftHand) {
   };
 
   if (engineKey === "loopCreator") {
-    const chordIndex = floor(constrain(map(getScaleIndex(selectedNote), 0, fixedScale.length - 1, 0, chordBank.length), 0, chordBank.length - 0.001));
-    return { ...base, type: "chord", chord: chordBank[chordIndex], inversion: 2, velocitySpread: 0.22 };
+    const chord = transposeChordToSelectedHeight(droneChordBank[selectedDroneChordIndex] || droneChordBank[0], selectedNote);
+    return { ...base, type: "chord", chord, inversion: selectedDroneChordIndex % 3, velocitySpread: 0.18 + (layers.loopCreator.params.variation || 0.1) * 0.22, shimmer: layers.loopCreator.params.chance || 0.1 };
   }
 
   if (engineKey === "motion") {
-    const subdivision = rhythmSubdivisions[floor(constrain(map(selectedFilter, 0, 1, 0, rhythmSubdivisions.length), 0, rhythmSubdivisions.length - 0.001))];
-    return { ...base, type: "percussion", subdivision, randomHits: floor(map(getNoteHeightValue(), 0, 1, 0, 9)), probability: map(getNoteHeightValue(), 0, 1, 0.15, 0.7) };
+    const subdivision = rhythmSubdivisions[floor(constrain(map(percussionSubdivisionValue, 0, 1, 0, rhythmSubdivisions.length), 0, rhythmSubdivisions.length - 0.001))];
+    return { ...base, type: "percussion", subdivision, randomHits: floor(map(percussionDensityValue, 0, 1, 0, 5)), probability: map(percussionDensityValue, 0, 1, 0.08, 0.42), velocity: map(percussionDensityValue, 0, 1, 0.34, 0.62) };
   }
 
   if (engineKey === "texture") {
-    return { ...base, type: "clickPattern", distortion: getNoteHeightValue(), note: fixedScale[floor(selectedFilter * (fixedScale.length - 0.001))] };
+    const noteIndex = floor(constrain(map(clickHarmonyValue, 0, 1, 0, fixedScale.length), 0, fixedScale.length - 0.001));
+    return { ...base, type: "clickPattern", distortion: selectedFilter, note: fixedScale[noteIndex], patternType: clickPatternValue, densityValue: clickDensityValue, harmonicRegion: clickHarmonyValue };
   }
 
   if (engineKey === "decay") {
     return { ...base, type: "sample", sampleIndex: selectedSampleIndex };
   }
 
-  return { ...base, type: "lead", note: selectedNote, velocity: map(getHandCloseness(rightHand), 0, 1, 0.22, 0.92) };
+  return { ...base, type: "lead", note: selectedNote, velocity: map(getHandCloseness(rightHand), 0, 1, 0.22, 0.92), instability: leadInstabilityValue, speed: leadSpeedValue, repeatCount: 1 + floor(leadSpeedValue * 3) };
+}
+
+function transposeChordToSelectedHeight(chord, anchorNote) {
+  const targetIndex = getScaleIndex(anchorNote);
+  const octaveShift = floor(map(targetIndex, 0, fixedScale.length - 1, -1, 1));
+  return chord.map((note) => transposeNoteOctaves(note, octaveShift));
+}
+
+function transposeNoteOctaves(note, octaveShift) {
+  const match = String(note).match(/^([A-G][b#]?)(-?\d+)$/);
+  if (!match) return note;
+  return match[1] + constrain(int(match[2]) + octaveShift, 1, 6);
 }
 
 function getThumbIndexCenter(hand) {
@@ -956,8 +1603,22 @@ function getThumbIndexCenter(hand) {
 function createRegularPercussionEvents(source) {
   const events = [];
   const regularCount = source.subdivision;
+  const baseIndex = getScaleIndex(source.note);
+  const offsets = [0, 3, 5, 7, 2, 4, 6, 8];
   for (let i = 0; i < regularCount; i++) {
-    events.push({ ...source, time: i / regularCount, probability: 1, random: false });
+    const accent = i % 4 === 0 ? 1 : i % 2 === 0 ? 0.74 : 0.52;
+    const noteIndex = constrain(baseIndex + offsets[i % offsets.length], 0, fixedScale.length - 1);
+    events.push({
+      ...source,
+      time: i / regularCount,
+      probability: 1,
+      random: false,
+      accent: i % 4 === 0,
+      note: fixedScale[noteIndex],
+      filterValue: constrain(source.filterValue + sin(i * 1.7) * 0.08, 0, 1),
+      velocity: constrain(source.velocity * accent, 0.12, 0.86),
+      pan: constrain((source.pan || 0) + sin(i * 0.73) * 0.28, -0.9, 0.9),
+    });
   }
   const inBetweenCount = source.randomHits;
   const inBetweenLayers = max(1, ceil(inBetweenCount / regularCount));
@@ -972,18 +1633,59 @@ function createRegularPercussionEvents(source) {
       probability: source.probability,
       random: false,
       inBetween: true,
-      velocity: source.velocity * accent,
+      note: fixedScale[constrain(baseIndex + 3 + (i % 4), 0, fixedScale.length - 1)],
+      filterValue: constrain(source.filterValue + 0.08 + sin(i * 2.1) * 0.1, 0, 1),
+      velocity: source.velocity * accent * 0.62,
+      pan: constrain((source.pan || 0) + cos(i * 1.1) * 0.42, -0.9, 0.9),
     });
   }
   return events.sort((a, b) => a.time - b.time);
 }
 
 function createClickPatternEvents(source) {
-  const count = floor(map(getNoteHeightValue(), 0, 1, 2, 12));
+  const count = floor(map(source.densityValue || clickDensityValue, 0, 1, 2, 9));
   const events = [];
+  const baseIndex = getScaleIndex(source.note);
+  const simple = [0, 0.25, 0.5, 0.75];
+  const syncopated = [0, 0.1875, 0.375, 0.625, 0.8125];
+  const broken = [0, 0.125, 0.3125, 0.4375, 0.6875, 0.875];
+  const shape = (source.patternType || 0) < 0.34 ? simple : (source.patternType || 0) < 0.67 ? syncopated : broken;
+  const offsets = [0, 7, 3, 10, 5, 2, 8, 4, 9, 1, 6, 0];
   for (let i = 0; i < count; i++) {
     const accent = i % 3 === 0 ? 0.82 : 0.48 + (i % 4) * 0.08;
-    events.push({ ...source, time: i / count, probability: 1, velocity: source.velocity * accent });
+    const noteIndex = constrain(baseIndex + offsets[i % offsets.length] - 2, 0, fixedScale.length - 1);
+    events.push({
+      ...source,
+      time: (shape[i % shape.length] + floor(i / shape.length)) / ceil(count / shape.length),
+      probability: 1,
+      note: fixedScale[noteIndex],
+      velocity: source.velocity * accent,
+      filterValue: constrain(source.filterValue + sin(i * 1.37) * 0.18, 0, 1),
+      distortion: constrain(source.distortion * (0.28 + (i % 5) * 0.08), 0, 0.72),
+      harmonicRatio: [1, 1.5, 2, 2.5][i % 4],
+      durationSeconds: 0.012 + (i % 3) * 0.008,
+      noiseAccent: i % 7 === 0 && (source.patternType || 0) > 0.42,
+      pan: constrain((source.pan || 0) + sin(i * 0.91) * 0.5, -0.9, 0.9),
+    });
+  }
+  return events.sort((a, b) => a.time - b.time);
+}
+
+function createLeadLoopEvents(source) {
+  const baseIndex = getScaleIndex(source.note);
+  const offsets = [0, 2, 4, 1, -1, 3];
+  const count = 6;
+  const events = [];
+  for (let i = 0; i < count; i++) {
+    const noteIndex = constrain(baseIndex + offsets[i % offsets.length], 0, fixedScale.length - 1);
+    events.push({
+      ...source,
+      time: i / count,
+      note: fixedScale[noteIndex],
+      velocity: constrain(source.velocity * (i % 3 === 0 ? 0.86 : 0.58), 0.12, 0.92),
+      filterValue: constrain(source.filterValue + sin(i * 0.9) * 0.12, 0, 1),
+      probability: 1,
+    });
   }
   return events;
 }
@@ -1122,6 +1824,50 @@ function memoryFade(memory) {
   if (remaining <= 1) return 0.35;
   if (remaining <= 2) return 0.65;
   return 1;
+}
+
+class BodyPoseTracker {
+  static getPrimaryPose(sourcePoses) {
+    if (!sourcePoses || !sourcePoses.length) return null;
+    let best = sourcePoses[0];
+    let bestScore = -1;
+    for (const pose of sourcePoses) {
+      const score = BodyPoseTracker.getPoseScore(pose);
+      if (score > bestScore) {
+        best = pose;
+        bestScore = score;
+      }
+    }
+    return best;
+  }
+
+  static getPoseScore(pose) {
+    const leftWrist = BodyPoseTracker.getKeypoint(pose, "left_wrist", 0);
+    const rightWrist = BodyPoseTracker.getKeypoint(pose, "right_wrist", 0);
+    const leftShoulder = BodyPoseTracker.getKeypoint(pose, "left_shoulder", 0);
+    const rightShoulder = BodyPoseTracker.getKeypoint(pose, "right_shoulder", 0);
+    let score = 0;
+    for (const point of [leftWrist, rightWrist, leftShoulder, rightShoulder]) if (isFinitePoint(point)) score += point.confidence || 1;
+    return score;
+  }
+
+  static getKeypoint(pose, name, minimumConfidence = 0.18) {
+    if (!pose) return null;
+    let point = null;
+    if (pose[name]) {
+      point = pose[name];
+    } else if (pose.keypoints && Array.isArray(pose.keypoints)) {
+      point = pose.keypoints.find((item) => item && (item.name === name || item.part === name || item.label === name));
+    }
+    if (!point || !Number.isFinite(point.x) || !Number.isFinite(point.y)) return null;
+    const confidence = Number.isFinite(point.confidence) ? point.confidence : Number.isFinite(point.score) ? point.score : 1;
+    if (confidence < minimumConfidence) return null;
+    return {
+      x: constrain(point.x, 0, width),
+      y: constrain(point.y, 0, height),
+      confidence,
+    };
+  }
 }
 
 class HandTracker {
