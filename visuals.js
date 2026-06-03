@@ -14,8 +14,12 @@ class VisualSystem {
     this.threeTextMask = null;
     this.fourTextMask = null;
     this.paintMask = null;
+    this.percussionTextMask = null;
+    this.percussionPaintMask = null;
     this.maskSize = { width: 0, height: 0 };
     this.lastPaintPoint = null;
+    this.lastPercussionPaintPoint = null;
+    this.lastPercussionPaintPoints = { left: null, right: null, gesture: null };
     this.currentFingerPoint = null;
     this.fillProgress = 0;
     this.transitionProgress = 0;
@@ -33,6 +37,15 @@ class VisualSystem {
     this.spacing = 6;
     this.dotSize = 3.2;
     this.reactionRipples = [];
+    this.clickDiffusionLayer = null;
+    this.clickDiffusionFeedback = null;
+    this.textDisplacementMemory = new Map();
+    this.sampleHandTrails = { left: [], right: [] };
+    this.leadVhsLayer = null;
+    this.leadVhsParticles = [];
+    this.lastLeadVhsPoint = null;
+    this.leadVhsLagPoint = null;
+    this.leadVhsTrail = [];
   }
 
   update(activeKey, layerState, analysis, gesturePoint, activeFinger) {
@@ -56,6 +69,8 @@ class VisualSystem {
     } else {
       this.currentFingerPoint = null;
     }
+    if (activeKey === "texture") this.updateClickDiffusion(gesturePoint);
+    if (activeKey === "motion") this.updatePercussionFluidPaint(gesturePoint);
     this.twoFingerPoints = activeKey === "motion" && activeFinger && activeFinger.points ? activeFinger.points : [];
     if (activeKey === "motion" && this.twoFingerStartedAt === null) this.twoFingerStartedAt = millis();
 
@@ -126,9 +141,21 @@ class VisualSystem {
 
   drawOneFingerVisual() {
     this.ensureOneFingerMasks();
+    if (activeProcessKey === "motion") {
+      this.drawPercussionFluidVisual();
+      const drawn = this.drawStoredPercussionDots();
+      if (!drawn) this.drawTwoFingerEchoes();
+      return;
+    }
+    if (activeProcessKey === "space") {
+      this.drawLeadVhsVisual();
+      this.drawStoredPercussionDots();
+      return;
+    }
     this.updateOneFingerTransition();
     this.drawReactionDiffusionLayer();
     this.drawDottedFluidPattern();
+    if (activeProcessKey === "texture") this.drawClickDiffusionLayer();
     const hasCurrentLoopDot = this.percussionDots.some((dot) => dot.key === activeProcessKey);
     if (activeProcessKey === "motion" || hasCurrentLoopDot) {
       const drawn = this.drawStoredPercussionDots();
@@ -146,14 +173,36 @@ class VisualSystem {
     this.threeTextMask = createGraphics(width, height);
     this.fourTextMask = createGraphics(width, height);
     this.paintMask = createGraphics(width, height);
+    this.percussionTextMask = createGraphics(width, height);
+    this.percussionPaintMask = createGraphics(width, height);
+    this.clickDiffusionLayer = createGraphics(width, height);
+    this.clickDiffusionFeedback = createGraphics(width, height);
+    this.leadVhsLayer = createGraphics(width, height);
     this.textMask.pixelDensity(1);
     this.nextTextMask.pixelDensity(1);
     this.threeTextMask.pixelDensity(1);
     this.fourTextMask.pixelDensity(1);
     this.paintMask.pixelDensity(1);
+    this.percussionTextMask.pixelDensity(1);
+    this.percussionPaintMask.pixelDensity(1);
+    this.clickDiffusionLayer.pixelDensity(1);
+    this.clickDiffusionFeedback.pixelDensity(1);
+    this.leadVhsLayer.pixelDensity(1);
     this.paintMask.background(0);
+    this.percussionPaintMask.background(0);
+    this.clickDiffusionLayer.clear();
+    this.clickDiffusionFeedback.clear();
+    this.leadVhsLayer.background(0);
+    this.textDisplacementMemory.clear();
+    this.sampleHandTrails = { left: [], right: [] };
+    this.leadVhsParticles = [];
+    this.lastLeadVhsPoint = null;
+    this.leadVhsLagPoint = null;
+    this.leadVhsTrail = [];
     this.maskSize = { width, height };
     this.lastPaintPoint = null;
+    this.lastPercussionPaintPoint = null;
+    this.lastPercussionPaintPoints = { left: null, right: null, gesture: null };
     this.currentFingerPoint = null;
     this.fillProgress = 0;
     this.transitionProgress = 0;
@@ -165,10 +214,11 @@ class VisualSystem {
     this.threePromptProgress = 0;
     this.fourPromptProgress = 0;
     this.stageLevel = 1;
-    this.drawTextMask(this.textMask, "select", "a sound");
-    this.drawTextMask(this.nextTextMask, "clap to", "loop the sound");
-    this.drawTextMask(this.threeTextMask, "some text", "is here");
-    this.drawTextMask(this.fourTextMask, "russia is a", "terrorist state");
+    this.drawStatementTextMask(this.textMask, "choose a", "box above");
+    this.drawStatementTextMask(this.nextTextMask, "russia is a", "terrorist state");
+    this.drawStatementTextMask(this.threeTextMask, "russia is a", "terrorist state");
+    this.drawStatementTextMask(this.fourTextMask, "russia is a", "terrorist state");
+    this.drawPercussionTextMask();
   }
 
   drawTextMask(mask, topLine, bottomLine) {
@@ -188,6 +238,130 @@ class VisualSystem {
       mask.text(topLine, width / 2, height / 2);
     }
     mask.loadPixels();
+  }
+
+  drawStatementTextMask(mask, topLine, bottomLine) {
+    mask.background(0);
+    mask.fill(255);
+    mask.noStroke();
+    mask.textAlign(CENTER, CENTER);
+    mask.textStyle(BOLD);
+    const longest = max(topLine.length, bottomLine.length);
+    const fittedSize = min(width * 0.27, (width * 0.94) / max(1, longest) * 1.92, height * 0.31);
+    const gap = fittedSize * 0.78;
+    mask.textSize(fittedSize);
+    mask.text(topLine, width / 2, height / 2 - gap * 0.52);
+    mask.text(bottomLine, width / 2, height / 2 + gap * 0.52);
+    mask.loadPixels();
+  }
+
+  drawPercussionTextMask() {
+    if (!this.percussionTextMask) return;
+    const mask = this.percussionTextMask;
+    mask.background(0);
+    mask.fill(255);
+    mask.noStroke();
+    mask.textAlign(CENTER, CENTER);
+    mask.textStyle(BOLD);
+    const topLine = "russia is a";
+    const bottomLine = "terrorist state";
+    const longest = max(topLine.length, bottomLine.length);
+    const fittedSize = min(width * 0.27, (width * 0.94) / max(1, longest) * 1.92, height * 0.31);
+    const gap = fittedSize * 0.78;
+    mask.textSize(fittedSize);
+    mask.text(topLine, width / 2, height / 2 - gap * 0.52);
+    mask.text(bottomLine, width / 2, height / 2 + gap * 0.52);
+    mask.loadPixels();
+  }
+
+  updatePercussionFluidPaint(gesturePoint) {
+    this.ensureOneFingerMasks();
+    const points = [];
+    if (typeof bodyLeftWrist !== "undefined" && isFinitePoint(bodyLeftWrist)) points.push({ point: bodyLeftWrist, key: "left" });
+    if (typeof bodyRightWrist !== "undefined" && isFinitePoint(bodyRightWrist)) points.push({ point: bodyRightWrist, key: "right" });
+    if (!points.length && isFinitePoint(gesturePoint)) points.push({ point: gesturePoint, key: "gesture" });
+    for (const item of points) {
+      const point = item.point;
+      const previous = this.lastPercussionPaintPoints[item.key] || point;
+      if (dist(point.x, point.y, previous.x, previous.y) > 1) {
+        for (let i = 0; i < 8; i++) {
+          const t = i / 7;
+          this.drawPercussionFluidBrush(lerp(previous.x, point.x, t), lerp(previous.y, point.y, t));
+        }
+      } else {
+        this.drawPercussionFluidBrush(point.x, point.y);
+      }
+      this.lastPercussionPaintPoints[item.key] = { x: point.x, y: point.y };
+    }
+    this.percussionPaintMask.filter(BLUR, 2);
+    this.percussionPaintMask.loadPixels();
+  }
+
+  drawPercussionFluidBrush(cx, cy) {
+    const mask = this.percussionPaintMask;
+    if (!mask) return;
+    mask.noStroke();
+    for (let i = 0; i < 7; i++) {
+      const angle = random(TWO_PI);
+      const radius = random(10, 70);
+      const x = cx + cos(angle) * radius;
+      const y = cy + sin(angle) * radius;
+      const w = random(70, 150);
+      const h = random(35, 100);
+      mask.push();
+      mask.translate(x, y);
+      mask.rotate(random(TWO_PI));
+      mask.fill(255, 55);
+      mask.ellipse(0, 0, w, h);
+      mask.pop();
+    }
+  }
+
+  drawPercussionFluidVisual() {
+    this.ensureOneFingerMasks();
+    background(255);
+    this.drawPercussionTextMask();
+    this.percussionTextMask.loadPixels();
+    this.percussionPaintMask.loadPixels();
+    noStroke();
+    const spacing = 4;
+    const dotSize = 2.7;
+    for (let x = 0; x < width; x += spacing) {
+      for (let y = 0; y < height; y += spacing) {
+        const index = 4 * (x + y * width);
+        const textValue = this.percussionTextMask.pixels[index];
+        const paintValue = this.percussionPaintMask.pixels[index];
+        const paintAmount = paintValue / 255;
+        const insideText = textValue > 100;
+        const insidePaint = paintAmount > 0.2;
+        const weakPaint = paintAmount > 0.12 && paintAmount <= 0.2;
+        const blink = (sin(frameCount * 0.12 + x * 0.07 + y * 0.041 + noise(x * 0.03, y * 0.03) * 9) + 1) * 0.5;
+        const blinkingWeakPaint = weakPaint && blink > 0.38;
+        const textWasTouched = insideText && insidePaint;
+        const visibleShape = insidePaint || blinkingWeakPaint || (insideText && !textWasTouched);
+        if (!visibleShape) continue;
+
+        const packed = this.applyPercussionPacking(x, y);
+        const flowA = noise(x * 0.006, y * 0.006, frameCount * 0.002);
+        const flowB = noise(x * 0.014 + 200, y * 0.014 - 100, frameCount * 0.001);
+        const wave = sin(flowA * 75 + flowB * 25 + x * 0.018 + y * 0.006 + frameCount * 0.025);
+        const greyWave = sin(flowA * 60 + flowB * 20 + x * 0.014 - y * 0.01 + frameCount * 0.02);
+        const paintEdge = paintAmount > 0.2 && paintAmount < 0.5;
+        const drawBlackDot = wave > 0.18;
+        const drawGreyDot = greyWave > 0.05 || paintEdge || blinkingWeakPaint;
+
+        if (insideText && !insidePaint) {
+          fill(0);
+          circle(packed.x, packed.y, dotSize);
+        } else if (drawBlackDot) {
+          fill(0, blinkingWeakPaint ? 95 + blink * 110 : 255);
+          circle(packed.x, packed.y, blinkingWeakPaint ? dotSize * 0.72 : dotSize);
+        } else if (drawGreyDot) {
+          fill(150, blinkingWeakPaint ? 75 + blink * 120 : 255);
+          circle(packed.x, packed.y, blinkingWeakPaint ? dotSize * 0.62 : dotSize * 0.95);
+        }
+      }
+    }
   }
 
   updatePaintMask(point) {
@@ -382,20 +556,35 @@ class VisualSystem {
   }
 
   applyHandTextDisplacement(point) {
-    let x = point.x;
-    let y = point.y;
+    const key = floor(point.x / 6) + ":" + floor(point.y / 6);
+    let memory = this.textDisplacementMemory.get(key);
+    if (!memory) {
+      memory = { dx: 0, dy: 0, seen: 0 };
+      this.textDisplacementMemory.set(key, memory);
+    }
+    let targetDx = 0;
+    let targetDy = 0;
     const hands = [];
     if (typeof bodyLeftWrist !== "undefined" && isFinitePoint(bodyLeftWrist)) hands.push(bodyLeftWrist);
     if (typeof bodyRightWrist !== "undefined" && isFinitePoint(bodyRightWrist)) hands.push(bodyRightWrist);
     for (const hand of hands) {
-      const distance = dist(x, y, hand.x, hand.y);
+      const distance = dist(point.x, point.y, hand.x, hand.y);
       const radius = 155;
       if (distance <= 0 || distance > radius) continue;
       const force = pow(1 - distance / radius, 2.1) * 34;
-      x += ((x - hand.x) / distance) * force;
-      y += ((y - hand.y) / distance) * force;
+      targetDx += ((point.x - hand.x) / distance) * force;
+      targetDy += ((point.y - hand.y) / distance) * force;
     }
-    return { x, y };
+    const hasPush = abs(targetDx) + abs(targetDy) > 0.01;
+    memory.dx = lerp(memory.dx, targetDx, hasPush ? 0.12 : 0.012);
+    memory.dy = lerp(memory.dy, targetDy, hasPush ? 0.12 : 0.012);
+    memory.seen = frameCount;
+    if (frameCount % 180 === 0 && this.textDisplacementMemory.size > 9000) {
+      for (const [memoryKey, item] of this.textDisplacementMemory) {
+        if (frameCount - item.seen > 240) this.textDisplacementMemory.delete(memoryKey);
+      }
+    }
+    return { x: point.x + memory.dx, y: point.y + memory.dy };
   }
 
   addReactionRipple(point) {
@@ -440,9 +629,369 @@ class VisualSystem {
     blendMode(BLEND);
   }
 
+  updateClickDiffusion(gesturePoint) {
+    this.ensureOneFingerMasks();
+    const g = this.clickDiffusionLayer;
+    const feedback = this.clickDiffusionFeedback;
+    if (!g || !feedback) return;
+
+    feedback.clear();
+    feedback.push();
+    feedback.tint(255, 242);
+    feedback.image(g, -2.6, -2.2, width + 5.2, height + 4.4);
+    feedback.tint(255, 78);
+    for (let i = 0; i < 7; i++) {
+      const stripY = floor(noise(i * 13.7, frameCount * 0.035) * height);
+      const stripH = 4 + floor(noise(i * 9.1, frameCount * 0.02) * 18);
+      const shift = (noise(i * 19.3, frameCount * 0.05) - 0.5) * 46;
+      feedback.copy(g, 0, stripY, width, stripH, shift, stripY, width, stripH);
+    }
+    feedback.pop();
+
+    g.clear();
+    g.push();
+    g.image(feedback, 0, 0);
+    g.drawingContext.globalCompositeOperation = "destination-out";
+    g.noStroke();
+    g.fill(0, 0, 0, 7);
+    g.rect(0, 0, width, height);
+    g.drawingContext.globalCompositeOperation = "source-over";
+    g.pop();
+
+    const hands = [];
+    if (typeof bodyLeftWrist !== "undefined" && isFinitePoint(bodyLeftWrist)) hands.push({ ...bodyLeftWrist, seed: 13 });
+    if (typeof bodyRightWrist !== "undefined" && isFinitePoint(bodyRightWrist)) hands.push({ ...bodyRightWrist, seed: 71 });
+    if (!hands.length && isFinitePoint(gesturePoint)) hands.push({ ...gesturePoint, seed: 37 });
+    for (const hand of hands) this.addClickDiffusionMark(hand.x, hand.y, 0.68, hand.seed);
+  }
+
+  addClickDiffusionBurst(x, y, strength = 1) {
+    this.ensureOneFingerMasks();
+    this.addClickDiffusionMark(x, y, strength, random(1000));
+  }
+
+  addClickDiffusionMark(x, y, strength = 1, seed = 0) {
+    const g = this.clickDiffusionLayer;
+    if (!g || !Number.isFinite(x) || !Number.isFinite(y)) return;
+    const pulse = 0.86 + this.globalAmp * 2.1;
+    const scale = strength * pulse;
+    g.push();
+    g.noStroke();
+    g.blendMode(MULTIPLY);
+    for (let i = 0; i < 22; i++) {
+      const glitch = noise(seed + 31, i * 0.61, frameCount * 0.06) > 0.72 ? random(-34, 34) : 0;
+      const angle = noise(seed + i * 0.17, frameCount * 0.018) * TWO_PI * 2;
+      const radius = pow(noise(seed + 4, i * 0.23, frameCount * 0.014), 1.45) * 118 * scale;
+      const px = x + cos(angle) * radius + glitch;
+      const py = y + sin(angle) * radius;
+      const w = (12 + noise(seed + 9, i, frameCount * 0.012) * 42) * scale;
+      const h = (5 + noise(seed + 15, i, frameCount * 0.012) * 22) * scale;
+      const alpha = (8 + noise(seed + 22, i) * 26) * constrain(strength, 0.25, 1.6);
+      g.fill(0, 0, 0, alpha);
+      g.push();
+      g.translate(px, py);
+      g.rotate(angle + frameCount * 0.004);
+      if (i % 3 === 0) {
+        g.noFill();
+        g.stroke(0, 0, 0, alpha * 1.6);
+        g.strokeWeight(0.9 + scale * 0.18);
+        g.ellipse(0, 0, w * 1.2, h * 1.4);
+        g.noStroke();
+      } else {
+        g.fill(0, 0, 0, alpha);
+        g.ellipse(0, 0, w, h);
+      }
+      g.pop();
+    }
+    for (let r = 0; r < 4; r++) {
+      g.noFill();
+      g.stroke(0, 0, 0, 42 * strength);
+      g.strokeWeight(1.1 + r * 0.12);
+      g.beginShape();
+      const baseRadius = (30 + r * 23) * scale;
+      for (let a = 0; a <= TWO_PI + 0.12; a += 0.16) {
+        const wobble = (noise(cos(a) + seed, sin(a) - seed, frameCount * 0.026 + r) - 0.5) * 42 * scale;
+        const glitch = noise(seed + r * 8, a * 2.5, frameCount * 0.035) > 0.82 ? random(-18, 18) : 0;
+        g.vertex(x + cos(a) * (baseRadius + wobble) + glitch, y + sin(a) * (baseRadius + wobble));
+      }
+      g.endShape(CLOSE);
+    }
+    g.pop();
+  }
+
+  drawClickDiffusionLayer() {
+    if (!this.clickDiffusionLayer) return;
+    push();
+    tint(255, 220);
+    image(this.clickDiffusionLayer, 0, 0);
+    pop();
+  }
+
+  ensureLeadVhsParticles() {
+    this.ensureOneFingerMasks();
+    if (this.leadVhsParticles.length) return;
+    for (let i = 0; i < 70; i++) {
+      this.leadVhsParticles.push({
+        index: i,
+        seed: random(1000),
+        x: random(width),
+        y: random(height),
+        vx: random(-1, 1),
+        vy: random(-1, 1),
+        angle: random(TWO_PI),
+        size: random(3, 14),
+        orbitRadius: random(18, 86),
+      });
+    }
+  }
+
+  getLeadVhsTarget() {
+    if (typeof bodyRightWrist !== "undefined" && isFinitePoint(bodyRightWrist)) return bodyRightWrist;
+    if (typeof bodyLeftWrist !== "undefined" && isFinitePoint(bodyLeftWrist)) return bodyLeftWrist;
+    return this.lastLeadVhsPoint || { x: width / 2, y: height / 2 };
+  }
+
+  drawLeadVhsVisual() {
+    this.ensureLeadVhsParticles();
+    const pg = this.leadVhsLayer;
+    if (!pg) return;
+    const target = this.getLeadVhsTarget();
+    const previous = this.lastLeadVhsPoint || target;
+    const handSpeed = dist(target.x, target.y, previous.x, previous.y);
+    this.lastLeadVhsPoint = { x: target.x, y: target.y };
+    if (!this.leadVhsLagPoint) this.leadVhsLagPoint = { x: target.x, y: target.y };
+    const lagAmount = constrain(map(handSpeed, 0, 42, 0.045, 0.16), 0.045, 0.16);
+    this.leadVhsLagPoint.x = lerp(this.leadVhsLagPoint.x, target.x, lagAmount);
+    this.leadVhsLagPoint.y = lerp(this.leadVhsLagPoint.y, target.y, lagAmount);
+    this.leadVhsTrail.push({ x: target.x, y: target.y, lagX: this.leadVhsLagPoint.x, lagY: this.leadVhsLagPoint.y, speed: handSpeed, life: 1 });
+    while (this.leadVhsTrail.length > 42) this.leadVhsTrail.shift();
+    const fluidTarget = this.leadVhsLagPoint;
+
+    const feedback = 0.86;
+    const blurAmount = 2;
+    const redShift = 6 + constrain(handSpeed * 0.06, 0, 8);
+    const speed = 0.72 + constrain(handSpeed * 0.01, 0, 1.25);
+    const distortion = 8 + constrain(handSpeed * 0.24, 0, 34);
+    const vhsNoise = 0.24 + constrain(handSpeed * 0.007, 0, 0.28);
+
+    pg.push();
+    pg.noStroke();
+    pg.fill(0, 0, 0, 255 * (1 - feedback));
+    pg.rect(0, 0, width, height);
+    pg.tint(255, 30);
+    pg.image(pg, -blurAmount, -blurAmount, width + blurAmount * 2, height + blurAmount * 2);
+    pg.noTint();
+    pg.blendMode(ADD);
+    this.drawLeadSoftField(pg, fluidTarget, redShift);
+    this.drawLeadDelayedTraces(pg, redShift);
+    this.drawLeadDragTrail(pg, previous, target, redShift);
+    for (const particle of this.leadVhsParticles) {
+      this.updateLeadVhsParticle(particle, fluidTarget, speed);
+      this.drawLeadVhsParticle(pg, particle, fluidTarget, redShift);
+    }
+    pg.blendMode(BLEND);
+    pg.pop();
+
+    this.renderLeadVhsRedshift(pg, fluidTarget, redShift, distortion, vhsNoise);
+  }
+
+  drawLeadSoftField(g, target, redShift) {
+    const cell = 84;
+    for (let y = cell / 2; y < height; y += cell) {
+      for (let x = cell / 2; x < width; x += cell) {
+        const d = dist(x, y, target.x, target.y);
+        const influence = map(constrain(d, 0, 250), 250, 0, 0, 1);
+        const n = noise(x * 0.004, y * 0.004, frameCount * 0.01);
+        const pulse = sin(frameCount * 0.03 + x * 0.01 + y * 0.01) * 0.5 + 0.5;
+        if (influence + n * 0.28 <= 0.62) continue;
+        const s = cell * (0.06 + influence * 0.12 + pulse * 0.055);
+        const a = 4 + influence * 18;
+        g.noStroke();
+        g.fill(255, 30, 15, a * 0.7);
+        g.circle(x, y, s);
+        g.fill(255, 120, 35, a * 0.25);
+        g.circle(x, y, s * 2.2);
+        g.fill(70, 220, 255, a * 0.18);
+        g.circle(x - redShift * 1.4, y, s * 1.3);
+      }
+    }
+  }
+
+  drawLeadDragTrail(g, previous, target, redShift) {
+    const d = dist(target.x, target.y, previous.x, previous.y);
+    const steps = max(1, floor(d / 4));
+    g.blendMode(ADD);
+    for (let i = 0; i <= steps; i++) {
+      const x = lerp(previous.x, target.x, i / steps);
+      const y = lerp(previous.y, target.y, i / steps);
+      g.noStroke();
+      const wobbleX = (noise(x * 0.015, y * 0.015, frameCount * 0.02) - 0.5) * 12;
+      const wobbleY = (noise(x * 0.015 + 20, y * 0.015, frameCount * 0.02) - 0.5) * 12;
+      g.fill(255, 35, 15, 88);
+      g.circle(x + wobbleX, y + wobbleY, 10);
+      g.fill(255, 120, 35, 32);
+      g.circle(x + wobbleX * 0.6, y + wobbleY * 0.6, 28);
+      g.fill(80, 220, 255, 28);
+      g.circle(x - redShift * 2 + wobbleX, y + wobbleY, 18);
+      g.noFill();
+      g.stroke(255, 180, 100, 70);
+      g.strokeWeight(1.2);
+      g.circle(x + wobbleX, y + wobbleY, 15);
+      g.noStroke();
+      g.fill(255, 240, 210, 150);
+      g.circle(x + wobbleX, y + wobbleY, 3.2);
+    }
+  }
+
+  drawLeadDelayedTraces(g, redShift) {
+    if (!this.leadVhsTrail.length) return;
+    g.blendMode(ADD);
+    for (let i = 0; i < this.leadVhsTrail.length; i++) {
+      const p = this.leadVhsTrail[i];
+      const age = i / max(1, this.leadVhsTrail.length - 1);
+      const lag = 1 - age;
+      const x = lerp(p.x, p.lagX, 0.72);
+      const y = lerp(p.y, p.lagY, 0.72);
+      const drift = (noise(i * 0.13, frameCount * 0.018) - 0.5) * 24 * lag;
+      const s = 5 + age * 10 + constrain(p.speed * 0.08, 0, 5);
+      const alpha = 18 + age * 48;
+      g.noStroke();
+      g.fill(255, 45, 18, alpha * 0.62);
+      g.circle(x + drift, y, s);
+      g.fill(255, 130, 42, alpha * 0.22);
+      g.circle(x + drift * 0.4, y, s * 2.1);
+      g.fill(80, 220, 255, alpha * 0.18);
+      g.circle(x - redShift * 1.8 + drift, y, s * 1.35);
+    }
+    g.noFill();
+    for (let pass = 0; pass < 3; pass++) {
+      g.stroke(pass === 2 ? 80 : 255, pass === 2 ? 220 : 95, pass === 2 ? 255 : 38, 24 - pass * 5);
+      g.strokeWeight(0.8 + pass * 0.34);
+      g.beginShape();
+      for (const p of this.leadVhsTrail) {
+        const wobble = (noise(p.lagX * 0.02 + pass, p.lagY * 0.02, frameCount * 0.014) - 0.5) * 18;
+        curveVertex(p.lagX + wobble, p.lagY - wobble * 0.35);
+      }
+      g.endShape();
+    }
+  }
+
+  updateLeadVhsParticle(particle, target, speed) {
+    const t = frameCount * 0.008 * speed;
+    const n1 = noise(particle.seed, t);
+    const n2 = noise(particle.seed + 100, t);
+    const n3 = noise(particle.seed + 200, t);
+    particle.angle += map(n1, 0, 1, -0.045, 0.045) * speed;
+    const orbitX = target.x + cos(particle.angle + particle.index * 0.16) * particle.orbitRadius * map(n2, 0, 1, 0.35, 1.2);
+    const orbitY = target.y + sin(particle.angle * 1.35 + particle.index * 0.11) * particle.orbitRadius * map(n3, 0, 1, 0.35, 1.2);
+    particle.vx += (orbitX - particle.x) * 0.045;
+    particle.vy += (orbitY - particle.y) * 0.045;
+    particle.vx += map(noise(particle.seed + 300, t), 0, 1, -0.22, 0.22);
+    particle.vy += map(noise(particle.seed + 400, t), 0, 1, -0.22, 0.22);
+    particle.vx *= 0.86;
+    particle.vy *= 0.86;
+    particle.x += particle.vx * speed;
+    particle.y += particle.vy * speed;
+    if (particle.x < -120) particle.x = width + 120;
+    if (particle.x > width + 120) particle.x = -120;
+    if (particle.y < -120) particle.y = height + 120;
+    if (particle.y > height + 120) particle.y = -120;
+  }
+
+  drawLeadVhsParticle(g, particle, target, redShift) {
+    const pulse = sin(frameCount * 0.05 + particle.index) * 0.5 + 0.5;
+    const d = dist(particle.x, particle.y, target.x, target.y);
+    const closeBoost = map(constrain(d, 0, 190), 190, 0, 0, 1);
+    const s = particle.size + pulse * 5 + closeBoost * 7;
+    const alpha = 14 + pulse * 40 + closeBoost * 56;
+    g.noStroke();
+    g.fill(255, 35, 15, alpha);
+    g.circle(particle.x, particle.y, s);
+    g.fill(255, 120, 30, alpha * 0.28);
+    g.circle(particle.x, particle.y, s * 2.8);
+    g.fill(80, 220, 255, alpha * 0.2);
+    g.circle(particle.x - redShift * 1.8, particle.y, s * 1.5);
+    g.noFill();
+    g.stroke(255, 170, 80, alpha * 0.35);
+    g.strokeWeight(1.5);
+    g.circle(particle.x, particle.y, s * 1.1);
+    g.noStroke();
+    g.fill(255, 235, 200, alpha * 0.6);
+    g.circle(particle.x, particle.y, max(4, s * 0.2));
+  }
+
+  renderLeadVhsRedshift(pg, target, redShift, distortion, vhsNoise) {
+    background(0);
+    const sliceH = 3;
+    for (let y = 0; y < height; y += sliceH) {
+      const tracking = sin(y * 0.03 + frameCount * 0.04) * distortion;
+      const n = noise(y * 0.012, frameCount * 0.018);
+      const tapeJitter = map(n, 0, 1, -distortion, distortion);
+      let handWarp = 0;
+      const d = abs(y - target.y);
+      if (d < 180) {
+        handWarp = map(d, 0, 180, distortion * 1.1, 0);
+        handWarp *= sin(frameCount * 0.08 + y * 0.05);
+      }
+      const offset = tracking * 0.35 + tapeJitter * 0.65 + handWarp;
+      tint(255, 30, 18, 230);
+      image(pg, redShift + offset, y, width, sliceH, 0, y, width, sliceH);
+      tint(255, 120, 45, 135);
+      image(pg, redShift * 0.35 + offset * 0.35, y, width, sliceH, 0, y, width, sliceH);
+      tint(40, 220, 255, 95);
+      image(pg, -redShift * 0.8 - offset * 0.45, y, width, sliceH, 0, y, width, sliceH);
+      tint(255, 220);
+      image(pg, offset * 0.08, y, width, sliceH, 0, y, width, sliceH);
+    }
+    noTint();
+    this.drawLeadVhsNoise(vhsNoise);
+  }
+
+  drawLeadVhsNoise(vhsNoise) {
+    push();
+    if (random() < 0.2 * vhsNoise) {
+      const y = random(height);
+      const h = random(5, 28);
+      const shift = random(-90, 90) * vhsNoise;
+      copy(0, y, width, h, shift, y + random(-8, 8), width, h);
+    }
+    noStroke();
+    for (let i = 0; i < 14 * vhsNoise; i++) {
+      const y = floor(random(height) / 6) * 6;
+      const x = floor(random(width) / 12) * 12;
+      fill(random() < 0.5 ? color(255, 40, 25, random(18, 65)) : color(80, 230, 255, random(12, 50)));
+      rect(x, y, random(20, 180), random(2, 8));
+    }
+    strokeWeight(1);
+    for (let y = 0; y < height; y += 3) {
+      stroke(0, 70);
+      line(0, y, width, y);
+    }
+    for (let y = 1; y < height; y += 6) {
+      stroke(255, 10);
+      line(0, y, width, y);
+    }
+    for (let i = 0; i < 20 * vhsNoise; i++) {
+      stroke(255, random(8, 30));
+      const x = random(width);
+      line(x, random(height), x + random(-8, 8), random(height));
+    }
+    noStroke();
+    fill(255, 255, 255, 15 * vhsNoise);
+    rect(0, 22 + sin(frameCount * 0.08) * 6, width, 4);
+    fill(0, 0, 0, 90);
+    rect(0, height - 20, width, 20);
+    noFill();
+    for (let i = 0; i < 120; i++) {
+      stroke(0, map(i, 0, 120, 0, 13));
+      rect(i, i, width - i * 2, height - i * 2);
+    }
+    pop();
+  }
+
   getHandContrastColor(side) {
     if (activeProcessKey === "space") return [255, 36, 30];
-    if (activeProcessKey === "texture") return side === "left" ? [35, 112, 255] : [255, 214, 26];
+    if (activeProcessKey === "texture") return side === "left" ? [35, 112, 255] : [255, 255, 255];
     return side === "left" ? [35, 112, 255] : [255, 214, 26];
   }
 
@@ -506,7 +1055,7 @@ class VisualSystem {
 
   getLoopDotSettings(key) {
     if (key === "loopCreator") return { color: [255, 228, 92], radius: 36 };
-    if (key === "texture") return { color: [255, 214, 26], radius: 48 };
+    if (key === "texture") return { color: [255, 255, 255], radius: 48 };
     if (key === "space") return { color: [255, 36, 30], radius: 46 };
     return { color: [35, 112, 255], radius: 42 };
   }
@@ -539,23 +1088,34 @@ class VisualSystem {
     if (alphaScale <= 0.01) return;
     mask.loadPixels();
     noStroke();
-    const step = dense ? 3 : 4;
+    const step = dense ? 4 : 4;
     for (let x = 0; x < width; x += step) {
       for (let y = 0; y < height; y += step) {
         const index = 4 * (x + y * width);
         const maskValue = mask.pixels[index];
-        if (maskValue <= 70) continue;
+        if (maskValue <= 70) {
+          if (!dense || !this.isNearMaskPixel(mask, x, y, 24)) continue;
+          const speckleNoise = noise(x * 0.042 + 91, y * 0.042 - 23, frameCount * 0.009);
+          if (speckleNoise < 0.6) continue;
+          const blink = (sin(frameCount * 0.075 + speckleNoise * 28 + x * 0.01) + 1) * 0.5;
+          if (speckleNoise > 0.88 && blink < 0.35) continue;
+          const moved = this.applyHandTextDisplacement({ x, y });
+          const alpha = 255 * alphaScale * map(speckleNoise, 0.6, 1, 0.16, 0.64) * map(blink, 0, 1, 0.42, 1);
+          fill(red(dotColor), green(dotColor), blue(dotColor), alpha);
+          circle(moved.x, moved.y, map(speckleNoise, 0.6, 1, 0.85, 2.55));
+          continue;
+        }
         const flowA = noise(x * 0.006, y * 0.006, frameCount * 0.002);
         const flowB = noise(x * 0.014 + 200, y * 0.014 - 100, frameCount * 0.001);
         const wave = sin(flowA * 75 + flowB * 25 + x * 0.018 + y * 0.006 + frameCount * 0.025);
         if (!dense && wave <= -0.24) continue;
-        if (dense && wave <= -0.72) continue;
+        if (dense && wave <= -0.82) continue;
         const blinkSeed = noise(x * 0.045 + 18, y * 0.045 - 7);
         const blink = dense && blinkSeed > 0.68 ? (sin(frameCount * 0.09 + blinkSeed * 18) + 1) * 0.5 : 1;
         if (dense && blinkSeed > 0.78 && blink < 0.28) continue;
         const edge = constrain(abs(maskValue - 150) / 150, 0, 1);
         const size = dense
-          ? map(maskValue, 70, 255, 2.2, 7.8) * map(edge, 0, 1, 1.12, 0.72) * map(blink, 0, 1, 0.55, 1.18)
+          ? map(maskValue, 70, 255, 1.6, 3.45) * map(edge, 0, 1, 1.04, 0.78) * map(blink, 0, 1, 0.55, 1.1)
           : 3.8;
         const moved = this.applyHandTextDisplacement({ x, y });
         fill(red(dotColor), green(dotColor), blue(dotColor), 255 * alphaScale * (dense ? map(blink, 0, 1, 0.48, 1) : 1));
@@ -564,12 +1124,30 @@ class VisualSystem {
     }
   }
 
+  isNearMaskPixel(mask, x, y, radius) {
+    const checks = [
+      [radius, 0],
+      [-radius, 0],
+      [0, radius],
+      [0, -radius],
+      [radius * 0.7, radius * 0.7],
+      [-radius * 0.7, radius * 0.7],
+      [radius * 0.7, -radius * 0.7],
+      [-radius * 0.7, -radius * 0.7],
+    ];
+    for (const offset of checks) {
+      const sx = floor(constrain(x + offset[0], 0, width - 1));
+      const sy = floor(constrain(y + offset[1], 0, height - 1));
+      const index = 4 * (sx + sy * width);
+      if (mask.pixels[index] > 80) return true;
+    }
+    return false;
+  }
+
   drawSampleGrid(visible, point) {
     if (!visible) return;
-    const cellW = width / sampleGridCols;
     const top = typeof sampleGridTop !== "undefined" ? sampleGridTop : typeof performanceTop !== "undefined" ? performanceTop : 0;
-    const areaH = height - top;
-    const cellH = areaH / sampleGridRows;
+    const layout = typeof getSampleGridLayout === "function" ? getSampleGridLayout() : [];
     const activeCells = [];
     if (typeof selectedSampleGridCells !== "undefined") {
       for (const cell of Object.values(selectedSampleGridCells)) {
@@ -580,52 +1158,221 @@ class VisualSystem {
       ? null
       : selectedSampleGridCell !== null
         ? selectedSampleGridCell
-        : isFinitePoint(point)
-          ? floor(constrain(map(point.y, top, height, 0, sampleGridRows), 0, sampleGridRows - 0.001)) * sampleGridCols + floor(constrain(map(point.x, 0, width, 0, sampleGridCols), 0, sampleGridCols - 0.001))
+        : isFinitePoint(point) && typeof getSampleGridCell === "function"
+          ? getSampleGridCell(point)
           : null;
     const loopingCell = getLoopingSampleGridCell();
 
-    for (const cell of activeCells) {
-      const col = cell % sampleGridCols;
-      const row = floor(cell / sampleGridCols) % sampleGridRows;
-      noStroke();
-      fill(255, 34, 28, 116 + this.globalAmp * 68);
-      rect(col * cellW, top + row * cellH, cellW, cellH);
+    push();
+    noStroke();
+    fill(246, 246, 244, 245);
+    rect(0, top, width, height - top);
+    pop();
+
+    if (layout.length) {
+      for (const cell of layout) {
+        const sampleIndex = cell.sampleIndex;
+        const isSampleCell = sampleIndex !== null && sampleIndex !== undefined;
+        const isActive = isSampleCell && (activeCells.includes(sampleIndex) || activeCell === sampleIndex);
+        const isLooping = isSampleCell && loopingCell === sampleIndex;
+        this.drawIrregularSampleCell(cell, isActive, isLooping);
+      }
+    } else {
+      noFill();
+      stroke(255);
+      rect(0, top, width, height - top);
     }
 
-    if (activeCell !== null) {
-      const col = activeCell % sampleGridCols;
-      const row = floor(activeCell / sampleGridCols) % sampleGridRows;
-      noStroke();
-      fill(255, 34, 28, 116 + this.globalAmp * 68);
-      rect(col * cellW, top + row * cellH, cellW, cellH);
+  }
+
+  drawIrregularSampleCell(cell, isActive, isLooping) {
+    const pulse = (sin(frameCount * 0.08 + cell.seed) + 1) * 0.5;
+    const isSampleCell = cell.sampleIndex !== null && cell.sampleIndex !== undefined;
+    if (!isSampleCell) return;
+
+    const gap = 1.15;
+    const activeAlpha = isActive ? 34 + pulse * 24 : 0;
+    const loopAlpha = isLooping ? 34 + this.globalAmp * 36 : 0;
+    noStroke();
+    fill(0);
+    rect(cell.x + gap, cell.y + gap, cell.w - gap * 2, cell.h - gap * 2);
+    if (isActive) {
+      fill(255, 255, 255, activeAlpha);
+      rect(cell.x + gap, cell.y + gap, cell.w - gap * 2, cell.h - gap * 2);
+    }
+    if (isLooping) {
+      fill(210, 226, 255, loopAlpha);
+      rect(cell.x + gap, cell.y + gap, cell.w - gap * 2, cell.h - gap * 2);
     }
 
-    if (loopingCell !== null) {
-      this.drawFluidSampleCell(loopingCell, color(20, 92, 255), 96 + this.globalAmp * 82);
-    }
+    this.drawRecursiveSampleSquares(cell, isActive, isLooping);
 
     noFill();
-    stroke(255, 255, 255, 48 + this.globalAmp * 70);
-    strokeWeight(1.2 + this.globalAmp * 2.4);
-    for (let i = 1; i < sampleGridCols; i++) {
-      const x = width * i / sampleGridCols;
-      this.drawWavyDivider(x, true, i);
-    }
-    for (let i = 1; i < sampleGridRows; i++) {
-      const y = top + areaH * i / sampleGridRows;
-      this.drawWavyDivider(y, false, i + 8);
+    stroke(isLooping ? color(210, 226, 255, 235) : isActive ? color(255, 255, 255, 245) : color(238, 238, 236, 210));
+    strokeWeight(isActive || isLooping ? 1.65 : 0.9);
+    rect(cell.x + gap, cell.y + gap, cell.w - gap * 2, cell.h - gap * 2);
+
+  }
+
+  drawRecursiveSampleSquares(cell, isActive, isLooping) {
+    const minSide = min(cell.w, cell.h);
+    const depthBoost = minSide > 54 ? 1 : 0;
+    const baseCols = max(2, floor(cell.w / max(18, minSide * 0.42)));
+    const baseRows = max(2, floor(cell.h / max(18, minSide * 0.42)));
+    const tile = min(cell.w / baseCols, cell.h / baseRows);
+    const usedW = tile * baseCols;
+    const usedH = tile * baseRows;
+    const startX = cell.x + (cell.w - usedW) * 0.5;
+    const startY = cell.y + (cell.h - usedH) * 0.5;
+
+    for (let row = 0; row < baseRows; row++) {
+      for (let col = 0; col < baseCols; col++) {
+        const x = startX + col * tile;
+        const y = startY + row * tile;
+        const n = this.sampleSquareNoise(cell, col, row, 0);
+        const depth = n > 0.74 ? 3 + depthBoost : n > 0.42 ? 2 + depthBoost : 1;
+        this.drawSampleSquareTile(x, y, tile, depth, cell, col, row, isActive, isLooping);
+      }
     }
   }
 
+  drawSampleSquareTile(x, y, size, depth, cell, col, row, isActive, isLooping) {
+    if (size < 5 || depth <= 0) return;
+    const n = this.sampleSquareNoise(cell, col, row, depth);
+    const gap = size > 22 ? 1.15 : 0.75;
+    const drawHole = depth > 1 && n > 0.86 && size > 16;
+
+    if (drawHole) {
+      noStroke();
+      fill(246, 246, 244, 246);
+      rect(x + gap, y + gap, size - gap * 2, size - gap * 2);
+    } else {
+      noStroke();
+      fill(0, isActive ? 232 : 255);
+      rect(x + gap, y + gap, size - gap * 2, size - gap * 2);
+      noFill();
+      stroke(isLooping ? color(205, 224, 255, 210) : color(238, 238, 236, isActive ? 235 : 190));
+      strokeWeight(size > 24 ? 0.82 : 0.62);
+      rect(x + gap, y + gap, size - gap * 2, size - gap * 2);
+    }
+
+    if (depth <= 1) return;
+    const subdivisions = n > 0.58 ? 3 : 2;
+    const child = size / subdivisions;
+    for (let yy = 0; yy < subdivisions; yy++) {
+      for (let xx = 0; xx < subdivisions; xx++) {
+        const childNoise = this.sampleSquareNoise(cell, col * 5 + xx, row * 5 + yy, depth + 7);
+        if (childNoise < 0.18 && depth < 3) continue;
+        this.drawSampleSquareTile(x + xx * child, y + yy * child, child, depth - 1, cell, col * subdivisions + xx, row * subdivisions + yy, isActive, isLooping);
+      }
+    }
+  }
+
+  sampleSquareNoise(cell, col, row, pass) {
+    if (typeof deterministicGridNoise === "function") {
+      return deterministicGridNoise(cell.seed + col * 11.7, row * 19.3 + cell.index, cell.w + cell.h, pass);
+    }
+    const value = sin((cell.seed + col * 13.17) * 12.9898 + (row * 17.31 + pass) * 78.233) * 43758.5453;
+    return value - floor(value);
+  }
+
+  drawSampleSubCells(cell, isActive, isLooping) {
+    const cols = cell.w > width * 0.26 ? 4 : 2;
+    const rows = cell.h > (height - cell.y) * 0.22 || cell.h > 82 ? 4 : 2;
+    const subW = cell.w / cols;
+    const subH = cell.h / rows;
+    noFill();
+    stroke(isLooping ? color(90, 160, 255, 130) : isActive ? color(255, 80, 60, 125) : color(255, 255, 255, 155));
+    strokeWeight(0.9);
+    for (let x = 1; x < cols; x++) line(cell.x + subW * x, cell.y, cell.x + subW * x, cell.y + cell.h);
+    for (let y = 1; y < rows; y++) line(cell.x, cell.y + subH * y, cell.x + cell.w, cell.y + subH * y);
+    noStroke();
+    fill(255, 245);
+    for (let y = 0; y < rows; y++) {
+      for (let x = 0; x < cols; x++) {
+        circle(cell.x + subW * (x + 0.5), cell.y + subH * (y + 0.5), 3.2);
+      }
+    }
+  }
+
+  drawSampleHandTrackingEffect(top) {
+    const hands = [];
+    if (typeof bodyLeftWrist !== "undefined" && isFinitePoint(bodyLeftWrist)) hands.push({ side: "left", point: bodyLeftWrist, color: [255, 255, 255], phase: 0 });
+    if (typeof bodyRightWrist !== "undefined" && isFinitePoint(bodyRightWrist)) hands.push({ side: "right", point: bodyRightWrist, color: [35, 112, 255], phase: 4.2 });
+    for (const hand of hands) {
+      if (hand.point.y < top) continue;
+      const trail = this.sampleHandTrails[hand.side] || [];
+      const previous = trail.length ? trail[trail.length - 1] : null;
+      const speed = previous ? dist(hand.point.x, hand.point.y, previous.x, previous.y) : 0;
+      trail.push({ x: hand.point.x, y: hand.point.y, speed, life: 1, seed: noise(hand.point.x * 0.01, hand.point.y * 0.01, frameCount * 0.01) * 1000 });
+      while (trail.length > 28) trail.shift();
+      this.sampleHandTrails[hand.side] = trail;
+      this.drawCableHandTrail(trail, hand.color, hand.phase);
+      this.drawCableHandCore(hand.point, hand.color, speed, hand.phase);
+    }
+  }
+
+  drawCableHandTrail(trail, rgb, phase) {
+    if (!trail || trail.length < 2) return;
+    noFill();
+    blendMode(ADD);
+    for (let pass = 0; pass < 3; pass++) {
+      const alpha = 34 - pass * 8;
+      stroke(rgb[0], rgb[1], rgb[2], alpha);
+      strokeWeight(0.8 + pass * 0.42);
+      beginShape();
+      for (let i = 0; i < trail.length; i++) {
+        const p = trail[i];
+        const age = i / max(1, trail.length - 1);
+        const wobble = (noise(p.x * 0.016 + pass, p.y * 0.016 - phase, frameCount * 0.02) - 0.5) * (18 + p.speed * 0.22) * age;
+        const angle = noise(p.seed, pass, frameCount * 0.015) * TWO_PI;
+        curveVertex(p.x + cos(angle) * wobble, p.y + sin(angle) * wobble);
+      }
+      endShape();
+    }
+    noStroke();
+    for (let i = 0; i < trail.length; i += 2) {
+      const p = trail[i];
+      const age = i / max(1, trail.length - 1);
+      const blink = (sin(frameCount * 0.2 + p.seed + phase) + 1) * 0.5;
+      fill(rgb[0], rgb[1], rgb[2], 18 + age * 88 * blink);
+      circle(p.x, p.y, 1.2 + age * 3.8 + p.speed * 0.012);
+    }
+    blendMode(BLEND);
+  }
+
+  drawCableHandCore(point, rgb, speed, phase) {
+    blendMode(ADD);
+    noFill();
+    const intensity = constrain(map(speed, 0, 34, 0.72, 1.45), 0.72, 1.45);
+    for (let ring = 0; ring < 8; ring++) {
+      const radius = (10 + ring * 7.5 + sin(frameCount * 0.08 + ring + phase) * 2.5) * intensity;
+      const alpha = (94 - ring * 9) * intensity;
+      stroke(rgb[0], rgb[1], rgb[2], alpha);
+      strokeWeight(1.4 - ring * 0.08);
+      beginShape();
+      for (let a = 0; a <= TWO_PI + 0.14; a += 0.14) {
+        const warp = (noise(cos(a) * 1.3 + phase, sin(a) * 1.3 + ring, frameCount * 0.018) - 0.5) * (9 + ring * 2.4 + speed * 0.08);
+        const glitch = noise(ring * 8.1, a * 3.1, frameCount * 0.035) > 0.88 ? random(-7, 7) : 0;
+        vertex(point.x + cos(a) * (radius + warp) + glitch, point.y + sin(a) * (radius + warp));
+      }
+      endShape(CLOSE);
+    }
+    noStroke();
+    fill(rgb[0], rgb[1], rgb[2], 230);
+    circle(point.x, point.y, 5.5 + intensity * 2.6);
+    blendMode(BLEND);
+  }
+
   drawFluidSampleCell(cell, fillColor, alpha) {
+    const layoutCell = typeof getSampleGridLayout === "function" ? getSampleGridLayout().find((item) => item.sampleIndex === cell) : null;
     const col = cell % sampleGridCols;
     const row = floor(cell / sampleGridCols) % sampleGridRows;
-    const w = width / sampleGridCols;
-    const topOffset = typeof sampleGridTop !== "undefined" ? sampleGridTop : typeof performanceTop !== "undefined" ? performanceTop : 0;
-    const h = (height - topOffset) / sampleGridRows;
-    const x = col * w;
-    const y = topOffset + row * h;
+    const fallbackTop = typeof sampleGridTop !== "undefined" ? sampleGridTop : typeof performanceTop !== "undefined" ? performanceTop : 0;
+    const w = layoutCell ? layoutCell.w : width / sampleGridCols;
+    const h = layoutCell ? layoutCell.h : (height - fallbackTop) / sampleGridRows;
+    const x = layoutCell ? layoutCell.x : col * w;
+    const y = layoutCell ? layoutCell.y : fallbackTop + row * h;
     const pad = 18 + this.globalAmp * 10;
     const left = x + pad;
     const right = x + w - pad;
@@ -738,6 +1485,7 @@ class VisualSystem {
     const c = processColors[key] || processColors.loopCreator;
     const x = Number.isFinite(event.visualX) ? event.visualX : width * 0.5;
     const y = Number.isFinite(event.visualY) ? event.visualY : height * 0.5;
+    if (key === "texture") this.addClickDiffusionBurst(x, y, constrain((event.velocity || 0.45) * 1.3, 0.35, 1.25));
     particles.push({
       x,
       y,

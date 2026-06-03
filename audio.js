@@ -1,7 +1,7 @@
 class AudioEngine {
   constructor() {
-    this.limiter = new Tone.Limiter(-6).toDestination();
-    this.master = new Tone.Gain(0.66).connect(this.limiter);
+    this.limiter = new Tone.Limiter(-3).toDestination();
+    this.master = new Tone.Gain(0.96).connect(this.limiter);
     this.outputAnalyser = new Tone.Analyser("waveform", 1024);
     this.fftAnalyser = new Tone.Analyser("fft", 64);
     this.memoryFilter = new Tone.Filter(3600, "lowpass");
@@ -11,7 +11,7 @@ class AudioEngine {
     this.pingDelay = new Tone.PingPongDelay("4n", 0.12);
     this.reverb = new Tone.Reverb({ decay: 8.2, wet: 0.42 });
     this.width = new Tone.Panner(0);
-    this.mainGain = new Tone.Gain(0.72);
+    this.mainGain = new Tone.Gain(0.9);
 
     this.mainGain.chain(this.memoryFilter, this.memoryDistortion, this.memoryCrusher, this.delay, this.reverb, this.width, this.master);
     this.mainGain.connect(this.master);
@@ -28,8 +28,8 @@ class AudioEngine {
   }
 
   createLoopCreatorEngine() {
-    const noteFilter = new Tone.Filter(780, "lowpass").connect(this.mainGain);
-    const noteGain = new Tone.Gain(0.64).connect(noteFilter);
+    const noteFilter = new Tone.Filter(620, "lowpass").connect(this.mainGain);
+    const noteGain = new Tone.Gain(0.62).connect(noteFilter);
     const voice = new Tone.PolySynth(Tone.FMSynth, {
       harmonicity: 0.62,
       modulationIndex: 0.22,
@@ -55,19 +55,22 @@ class AudioEngine {
     const lfo = new Tone.LFO({ frequency: 0.08, min: -18, max: 18 });
     const filterLfo = new Tone.LFO({ frequency: 0.05, min: 520, max: 2200 });
     filterLfo.connect(this.loopEngine.noteFilter.frequency);
-    const drumDistortion = new Tone.Distortion(0.075).connect(this.mainGain);
-    const drumFilter = new Tone.Filter(760, "lowpass").connect(drumDistortion);
-    const drumGain = new Tone.Gain(0.48).connect(drumFilter);
+    const drumDistortion = new Tone.Distortion(0.035).connect(this.mainGain);
+    const drumFilter = new Tone.Filter(980, "lowpass").connect(drumDistortion);
+    const drumGain = new Tone.Gain(0.42).connect(drumFilter);
     const kick = new Tone.MembraneSynth({
-      pitchDecay: 0.04,
-      octaves: 2.1,
+      pitchDecay: 0.018,
+      octaves: 1.15,
       oscillator: { type: "sine" },
-      envelope: { attack: 0.002, decay: 0.28, sustain: 0.01, release: 0.16 },
+      envelope: { attack: 0.006, decay: 0.34, sustain: 0.02, release: 0.28 },
     }).connect(drumGain);
-    const tickFilter = new Tone.Filter(1550, "bandpass").connect(drumGain);
+    const tickFilter = new Tone.Filter(1350, "bandpass").connect(drumGain);
     const tickGain = new Tone.Gain(0).connect(tickFilter);
-    const tick = new Tone.Noise("brown").connect(tickGain);
-    return { lfo, filterLfo, drumFilter, drumDistortion, drumGain, kick, tick, tickGain, drift: 0, timing: 0, pitch: 0 };
+    const tick = new Tone.Noise("pink").connect(tickGain);
+    const tunedClickFilter = new Tone.Filter(1150, "bandpass").connect(drumGain);
+    const tunedClickGain = new Tone.Gain(0).connect(tunedClickFilter);
+    const tunedClick = new Tone.Oscillator({ type: "triangle", frequency: 220 }).connect(tunedClickGain);
+    return { lfo, filterLfo, drumFilter, drumDistortion, drumGain, kick, tick, tickGain, tunedClick, tunedClickGain, tunedClickFilter, drift: 0, timing: 0, pitch: 0 };
   }
 
   createTextureEngine() {
@@ -75,28 +78,31 @@ class AudioEngine {
     const hissGain = new Tone.Gain(0).connect(hissFilter);
     const hiss = new Tone.Noise("pink").connect(hissGain);
     const crackleGain = new Tone.Gain(0).connect(this.mainGain);
-    const crackle = new Tone.Noise("pink").connect(new Tone.Filter(3600, "bandpass").connect(crackleGain));
-    const clickFilter = new Tone.Filter(1800, "bandpass").connect(this.mainGain);
+    const crackle = new Tone.Noise("pink").connect(new Tone.Filter(3200, "bandpass").connect(crackleGain));
+    const clickFilter = new Tone.Filter(2100, "bandpass").connect(this.mainGain);
     const clickGain = new Tone.Gain(0).connect(clickFilter);
     const click = new Tone.Oscillator({ type: "triangle", frequency: 900 }).connect(clickGain);
     return { hiss, hissGain, hissFilter, crackle, crackleGain, click, clickGain, clickFilter };
   }
 
   createSpaceEngine() {
-    const leadFilter = new Tone.Filter(1250, "lowpass").connect(this.mainGain);
-    const leadGain = new Tone.Gain(0.28).connect(leadFilter);
+    const leadDelay = new Tone.FeedbackDelay({ delayTime: "8n", feedback: 0.34, wet: 0.34 }).connect(this.reverb);
+    const leadFilter = new Tone.Filter(980, "lowpass").connect(this.mainGain);
+    leadFilter.connect(leadDelay);
+    const leadGain = new Tone.Gain(0.32).connect(leadFilter);
     const lead = new Tone.FMSynth({
-      harmonicity: 0.72,
-      modulationIndex: 0.45,
+      harmonicity: 0.51,
+      modulationIndex: 0.34,
       oscillator: { type: "sine" },
-      modulation: { type: "triangle" },
-      envelope: { attack: 0.018, decay: 0.2, sustain: 0.18, release: 0.42 },
-      modulationEnvelope: { attack: 0.012, decay: 0.16, sustain: 0.12, release: 0.28 },
+      modulation: { type: "sine" },
+      envelope: { attack: 0.025, decay: 0.26, sustain: 0.12, release: 0.62 },
+      modulationEnvelope: { attack: 0.03, decay: 0.22, sustain: 0.08, release: 0.46 },
     }).connect(leadGain);
-    const crackleFilter = new Tone.Filter(2800, "bandpass").connect(this.mainGain);
+    const crackleFilter = new Tone.Filter(1900, "bandpass").connect(this.mainGain);
+    crackleFilter.connect(leadDelay);
     const crackleGain = new Tone.Gain(0).connect(crackleFilter);
     const crackle = new Tone.Noise("pink").connect(crackleGain);
-    return { lead, leadGain, leadFilter, leadCrusher: null, leadDelay: null, crackle, crackleGain, wet: 0.18, feedback: 0.12, width: 0.1 };
+    return { lead, leadGain, leadFilter, leadCrusher: null, leadDelay, crackle, crackleGain, wet: 0.34, feedback: 0.34, width: 0.1 };
   }
 
   createMemoryEngine() {
@@ -104,7 +110,7 @@ class AudioEngine {
   }
 
   createSampleEngine() {
-    const limiter = new Tone.Limiter(-8).connect(this.mainGain);
+    const limiter = new Tone.Limiter(-4).connect(this.mainGain);
     const compressor = new Tone.Compressor({
       threshold: -30,
       ratio: 8,
@@ -114,7 +120,7 @@ class AudioEngine {
     const sampleDistortion = new Tone.Distortion(0.01).connect(compressor);
     const lowpass = new Tone.Filter(2600, "lowpass").connect(sampleDistortion);
     const highpass = new Tone.Filter(80, "highpass").connect(lowpass);
-    const gain = new Tone.Gain(0.92).connect(highpass);
+    const gain = new Tone.Gain(1.12).connect(highpass);
     const states = samplePaths.map((path) => ({ path, loaded: false, failed: false, trimDb: 0 }));
     const players = samplePaths.map((path, index) => {
       const player = new Tone.Player({
@@ -143,6 +149,7 @@ class AudioEngine {
     this.motionEngine.lfo.start();
     this.motionEngine.filterLfo.start();
     this.motionEngine.tick.start();
+    this.motionEngine.tunedClick.start();
     this.textureEngine.hiss.start();
     this.textureEngine.crackle.start();
     this.textureEngine.click.start();
@@ -259,16 +266,20 @@ class AudioEngine {
       if (random() > event.probability) return;
       const isInBetween = event.inBetween || event.random;
       const noteFreq = noteToFrequency(event.note || (isInBetween ? "G2" : "C2"));
-      const baseFreq = isInBetween ? noteFreq * 0.45 : noteFreq * (event.accent ? 0.32 : 0.26);
-      if (this.motionEngine.drumDistortion) this.motionEngine.drumDistortion.distortion = map(event.filterValue || 0.5, 0, 1, 0.045, 0.14);
-      this.motionEngine.drumFilter.frequency.setValueAtTime(map(event.filterValue || 0.5, 0, 1, 360, 1050), time);
+      const brightness = event.filterValue || 0.5;
+      const baseFreq = noteFreq * (event.accent ? 0.24 : 0.31);
+      if (this.motionEngine.drumDistortion) this.motionEngine.drumDistortion.distortion = map(brightness, 0, 1, 0.018, 0.085);
+      this.motionEngine.drumFilter.frequency.setValueAtTime(map(brightness, 0, 1, 360, 1500), time);
+      this.motionEngine.tunedClickFilter.frequency.setValueAtTime(map(brightness, 0, 1, 620, 2600), time);
       if (isInBetween) {
-        this.triggerGate(this.motionEngine.tick, this.motionEngine.tickGain, 0, 0.014 + (event.filterValue || 0) * 0.018, time, velocity * 0.16);
+        const ratio = event.harmonicRatio || random([1, 1.5, 2]);
+        this.triggerGate(this.motionEngine.tunedClick, this.motionEngine.tunedClickGain, noteFreq * ratio, 0.018 + brightness * 0.018, time, velocity * 0.2);
+        this.triggerGate(this.motionEngine.tick, this.motionEngine.tickGain, 0, 0.018 + brightness * 0.02, time + 0.004, velocity * 0.045);
       } else if (event.accent) {
-        this.motionEngine.kick.triggerAttackRelease(baseFreq, "8n", time, velocity * 0.78);
+        this.motionEngine.kick.triggerAttackRelease(baseFreq, "8n", time, velocity * 0.58);
+        this.triggerGate(this.motionEngine.tunedClick, this.motionEngine.tunedClickGain, noteFreq * 0.5, 0.026, time + 0.012, velocity * 0.13);
       } else {
-        this.motionEngine.drumFilter.frequency.setValueAtTime(map(event.filterValue || 0.5, 0, 1, 320, 880), time);
-        this.triggerGate(this.motionEngine.tick, this.motionEngine.tickGain, 0, 0.02, time, velocity * 0.2);
+        this.triggerGate(this.motionEngine.tunedClick, this.motionEngine.tunedClickGain, noteFreq * random([0.75, 1, 1.5]), 0.022, time, velocity * 0.16);
       }
       return;
     }
@@ -276,12 +287,13 @@ class AudioEngine {
     if (event.type === "clickPattern") {
       if (random() > event.probability) return;
       this.memoryDistortion.distortion = map(event.distortion || 0.2, 0, 1, 0.001, 0.022);
-      this.textureEngine.clickFilter.frequency.setValueAtTime(map(event.filterValue || 0.5, 0, 1, 700, 2600), time);
+      this.textureEngine.clickFilter.frequency.setValueAtTime(map(event.filterValue || 0.5, 0, 1, 820, 3400), time);
       const clickFreq = noteToFrequency(event.note) * (event.harmonicRatio || 1);
-      const clickDuration = event.durationSeconds || (0.018 + (event.distortion || 0) * 0.018);
-      this.triggerGate(this.textureEngine.click, this.textureEngine.clickGain, clickFreq, clickDuration, time, velocity * 0.18);
-      if (event.noiseAccent && this.textureEngine.crackleGain) {
-        this.triggerGate(this.textureEngine.crackle, this.textureEngine.crackleGain, 0, clickDuration * 1.7, time + 0.006, velocity * 0.08);
+      const clickDuration = event.durationSeconds || (0.024 + (event.distortion || 0) * 0.028);
+      this.triggerGate(this.textureEngine.click, this.textureEngine.clickGain, clickFreq, clickDuration, time, velocity * 0.46);
+      if (this.textureEngine.crackleGain) {
+        const accent = event.noiseAccent ? 0.18 : 0.08;
+        this.triggerGate(this.textureEngine.crackle, this.textureEngine.crackleGain, 0, clickDuration * 1.5, time + 0.004, velocity * accent);
       }
       return;
     }
@@ -306,8 +318,8 @@ class AudioEngine {
     const seconds = Number.isFinite(time) ? time : Tone.now();
     const slowA = (sin(seconds * 0.045) + 1) * 0.5;
     const slowB = (sin(seconds * 0.027 + 1.8) + 1) * 0.5;
-    const filterFrequency = map(event.filterValue || 0.5, 0, 1, 95, 4200) * map(slowA, 0, 1, 0.72, 1.22 + movement * 0.16);
-    this.setAudioValue(this.loopEngine.noteFilter.frequency, constrain(filterFrequency, 85, 4800), 1.8 + slowB * 2.8);
+    const filterFrequency = map(event.filterValue || 0.5, 0, 1, 70, 2600) * map(slowA, 0, 1, 0.66, 1.1 + movement * 0.2);
+    this.setAudioValue(this.loopEngine.noteFilter.frequency, constrain(filterFrequency, 65, 3400), 1.4 + slowB * 2.4);
     if (this.loopEngine.droneChorus) {
       this.setAudioValue(this.loopEngine.droneChorus.wet, constrain(0.16 + slowB * 0.28 + movement * 0.12, 0.12, 0.62), 2.2);
       this.loopEngine.droneChorus.depth = constrain(0.22 + slowA * 0.34 + movement * 0.12, 0.16, 0.72);
@@ -319,19 +331,22 @@ class AudioEngine {
     for (let i = 0; i < chord.length; i++) {
       const relativeVelocity = constrain(velocity * random(0.58, 1.02 + movement * 0.34 + (event.velocitySpread || 0.1)), 0.04, 0.84);
       const delay = i * random(0.015, 0.08 + movement * 0.12);
-      const note = i > 2 && slowA > 0.76 ? transposeNoteOctaves(chord[i], -1) : chord[i];
-      this.loopEngine.voice.triggerAttackRelease(note, random(["1m", "2m", "1m"]), time + delay, relativeVelocity * map(loopParams.density || 0.24, 0, 1, 0.38, 0.66));
+      const lowFold = i > 1 && (slowA > 0.58 || movement > 0.42) ? -1 : 0;
+      const note = transposeNoteOctaves(chord[i], lowFold);
+      this.loopEngine.voice.triggerAttackRelease(note, random(["1m", "2m", "1m"]), time + delay, relativeVelocity * map(loopParams.density || 0.24, 0, 1, 0.34, 0.62));
     }
   }
 
   playExperimentalLead(event, time, velocity) {
     const instability = constrain(event.instability || 0, 0, 1);
     const speed = constrain(event.speed || 0, 0, 1);
-    const cutoff = map(event.filterValue || 0.5, 0, 1, 420, 4200);
+    const cutoff = map(event.filterValue || 0.5, 0, 1, 220, 3200);
     this.spaceEngine.leadFilter.frequency.setValueAtTime(cutoff, time);
+    if (this.spaceEngine.lead.modulationIndex) this.setAudioValue(this.spaceEngine.lead.modulationIndex, map(instability + speed * 0.75, 0, 1.75, 0.18, 1.55), 0.035);
     if (this.spaceEngine.leadDelay) {
-      this.spaceEngine.leadDelay.wet.value = map(instability, 0, 1, 0.08, 0.34);
-      this.spaceEngine.leadDelay.feedback.value = map(instability, 0, 1, 0.08, 0.36);
+      this.setAudioValue(this.spaceEngine.leadDelay.wet, map(instability + speed * 0.45, 0, 1.45, 0.26, 0.58), 0.03);
+      this.setAudioValue(this.spaceEngine.leadDelay.feedback, map(instability + speed * 0.35, 0, 1.35, 0.26, 0.62), 0.03);
+      this.setAudioValue(this.spaceEngine.leadDelay.delayTime, random(["16n", "8n", "8n.", "4n"]), 0.02);
     }
     if (this.spaceEngine.leadCrusher && this.spaceEngine.leadCrusher.bits) {
       const bits = floor(map(instability + speed * 0.4, 0, 1.4, 12, 6));
@@ -341,14 +356,16 @@ class AudioEngine {
         this.spaceEngine.leadCrusher.bits = bits;
       }
     }
-    const repeats = constrain(event.repeatCount || 1, 1, 4);
+    const repeats = constrain(event.repeatCount || 1, 1, 7);
     for (let i = 0; i < repeats; i++) {
-      const jitter = i * map(speed, 0, 1, 0.04, 0.018) + random(-0.004, 0.006) * instability;
-      const note = i && random() < 0.35 + instability * 0.25 ? transposeNoteOctaves(event.note, random([-1, 1])) : event.note;
-      this.spaceEngine.lead.triggerAttackRelease(note, random(["32n", "16n", "8n"]), time + jitter, velocity * map(i, 0, repeats - 1 || 1, 0.5, 0.18));
+      const jitter = i * map(speed, 0, 1, 0.062, 0.014) + random(-0.006, 0.01) * instability;
+      const octave = i && random() < 0.42 + instability * 0.22 ? random([-1, 0, 0, 1]) : 0;
+      const note = transposeNoteOctaves(event.note, octave);
+      const dur = random(["64n", "32n", "32n", "16n"]);
+      this.spaceEngine.lead.triggerAttackRelease(note, dur, time + jitter, velocity * map(i, 0, repeats - 1 || 1, 0.54, 0.14));
     }
     if (this.spaceEngine.crackleGain) {
-      this.triggerGate(this.spaceEngine.crackle, this.spaceEngine.crackleGain, 0, 0.018 + speed * 0.035, time + 0.006, velocity * map(instability, 0, 1, 0.012, 0.08));
+      this.triggerGate(this.spaceEngine.crackle, this.spaceEngine.crackleGain, 0, 0.03 + speed * 0.08, time + 0.006, velocity * map(instability + speed * 0.7, 0, 1.7, 0.045, 0.24));
     }
   }
 
@@ -373,7 +390,7 @@ class AudioEngine {
     const repeatCount = max(1, floor(event.repeatCount || 1));
     const stateIndex = Number.isFinite(player.sampleIndex) ? player.sampleIndex : index;
     const trimDb = this.sampleEngine.states[stateIndex] ? this.sampleEngine.states[stateIndex].trimDb : 0;
-    const volume = map(velocity, 0, 1, -20, -7) + trimDb;
+    const volume = map(velocity, 0, 1, -16, -3) + trimDb;
     this.setSampleFilter(event, time);
     for (let i = 0; i < repeatCount; i++) {
       const startTime = time + i * 0.24;
@@ -484,7 +501,7 @@ class AudioEngine {
       playbackRate: 1,
     }).connect(this.sampleEngine.gain);
     const trimDb = this.sampleEngine.states[index] ? this.sampleEngine.states[index].trimDb : 0;
-    loopPlayer.volume.value = map(velocity, 0, 1, -22, -9) + trimDb;
+    loopPlayer.volume.value = map(velocity, 0, 1, -18, -5) + trimDb;
     loopPlayer.samplePath = player.samplePath || "";
     loopPlayer.isTextSample = loopPlayer.samplePath.includes("/text/");
     loopPlayer.start(time);
