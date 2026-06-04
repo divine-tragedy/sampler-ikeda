@@ -29,6 +29,10 @@ let selectedSampleGridCell = null;
 let selectedSampleGridCells = { left: null, right: null };
 let lastSampleGridCells = { left: null, right: null };
 let lastSampleEvents = { left: null, right: null };
+let sampleHandStates = {
+  left: { cell: null, enteredAt: 0, lastTriggerAt: -Infinity, activatedCell: null },
+  right: { cell: null, enteredAt: 0, lastTriggerAt: -Infinity, activatedCell: null },
+};
 let sampleModeWasActive = false;
 let saveCooldownUntil = 0;
 let stableActiveFinger = null;
@@ -36,11 +40,15 @@ let pendingFingerCount = null;
 let pendingFingerFrames = 0;
 let missingFingerFrames = 0;
 let activeMode = null;
+let lastActivatedMode = null;
+let lastActivatedModeAt = 0;
 let candidateMode = null;
+let candidateModeIsReset = false;
 let hoverWrist = null;
 let dwellStartTime = 0;
 let dwellProgress = 0;
 let activeInstructionText = "select a sound";
+let instructionHoldUntil = 0;
 let lastClapTime = 0;
 let clapCooldown = 700;
 let isClapActive = false;
@@ -71,13 +79,22 @@ let lastLiveClickAt = 0;
 let lastGestureEvents = {};
 let percussionSubdivisionValue = 0.45;
 let percussionDensityValue = 0.32;
+let percussionToneValue = 0.48;
+let percussionNoiseMixValue = 0.18;
+let percussionPressureValue = 0.5;
 let clickPatternValue = 0.35;
 let clickDensityValue = 0.3;
 let clickHarmonyValue = 0.45;
+let clickGlitchValue = 0.22;
+let clickSpaceValue = 0.24;
 let leadInstabilityValue = 0.2;
 let leadSpeedValue = 0;
 let lastLeadPoint = null;
 let lastLeadPointAt = 0;
+let droneCursorClouds = { left: [], right: [] };
+let droneCursorTrace = [];
+let previousDroneCursorPoints = { left: null, right: null };
+let handEchoTrails = { left: [], right: [] };
 
 const canvasW = 1048;
 const canvasH = 756;
@@ -87,6 +104,10 @@ const saveCooldown = 1400;
 const parameterLoopLength = 5000;
 const parameterRecordInterval = 70;
 const loopLifetimeCycles = 5;
+const backgroundPatternUpdateInterval = 8000;
+const sampleHoldDuration = 260;
+const sampleRetriggerCooldown = 1100;
+const sampleSameCellCooldown = 3000;
 const fingerModeSwitchFrames = 8;
 const fingerModeMissingFrames = 15;
 const instructionBarHeight = 16;
@@ -94,7 +115,8 @@ const modeButtonHeight = 16;
 const modeDwellDuration = 1500;
 const performanceTop = instructionBarHeight + modeButtonHeight;
 const modeActivationHitHeight = 96;
-const sampleGridTop = performanceTop;
+const sampleGridTop = performanceTop + 34;
+const droneCursorGrid = 5;
 
 const processOrder = ["loopCreator", "motion", "texture", "space", "decay"];
 const modeButtons = [
@@ -103,6 +125,7 @@ const modeButtons = [
   { mode: "drone", key: "loopCreator" },
   { mode: "lead", key: "space" },
   { mode: "sample", key: "decay" },
+  { mode: "reset", key: "reset", action: "reset" },
 ];
 const modeToProcessKey = {
   drone: "loopCreator",
@@ -158,31 +181,32 @@ const connections = [
 ];
 
 const scaleBanks = [
-  ["C2", "Eb2", "G2", "C3", "Eb3", "F3", "G3", "Bb3", "C4", "Eb4", "G4"],
-  ["D2", "F2", "A2", "D3", "F3", "G3", "A3", "C4", "D4", "F4", "A4"],
-  ["A1", "C2", "E2", "A2", "C3", "D3", "E3", "G3", "A3", "C4", "E4"],
+  ["A1", "C2", "D2", "E2", "G2", "A2", "C3", "D3", "E3", "G3", "A3"],
+  ["A2", "C3", "D3", "E3", "G3", "A3", "C4", "D4", "E4", "G4", "A4"],
+  ["E1", "G1", "A1", "C2", "D2", "E2", "G2", "A2", "C3", "D3", "E3"],
 ];
-const fixedScale = ["C2", "Eb2", "F2", "G2", "Bb2", "C3", "Eb3", "F3", "G3", "Bb3", "C4"];
+const fixedScale = ["A1", "C2", "D2", "E2", "G2", "A2", "C3", "D3", "E3", "G3", "A3", "C4"];
 const chordBank = [
-  ["C2", "G2", "Eb3"],
-  ["Eb2", "Bb2", "G3"],
-  ["F2", "C3", "G3"],
-  ["G2", "D3", "Bb3"],
-  ["Bb2", "F3", "C4"],
+  ["A1", "E2", "C3"],
+  ["C2", "G2", "E3"],
+  ["D2", "A2", "E3"],
+  ["E2", "A2", "G3"],
+  ["G1", "D2", "A2"],
 ];
 const droneChordBank = [
-  ["C2", "G2", "Bb2", "Eb3"],
-  ["A1", "E2", "G2", "C3"],
-  ["F1", "C2", "G2", "A2"],
-  ["Eb2", "Bb2", "D3", "F3"],
-  ["G1", "D2", "F2", "Bb2"],
-  ["Bb1", "F2", "C3", "Eb3"],
+  ["A2", "C3", "E3", "G3"],
+  ["C3", "E3", "G3", "A3"],
+  ["D3", "E3", "A3", "C4"],
+  ["E2", "A2", "D3", "G3"],
+  ["G2", "A2", "D3", "E3"],
+  ["A1", "E2", "A2", "C3"],
 ];
-const droneLowScale = ["A1", "C2", "Eb2", "F2", "G2", "Bb2", "C3", "Eb3", "F3"];
+const droneLowScale = ["A1", "E2", "G2", "A2", "C3", "D3", "E3", "G3", "A3"];
 const rhythmSubdivisions = [1, 2, 3, 4, 6, 8];
 const samplePaths = [
   "sounds/Female-Evil-Laugh.wav",
   "sounds/Lakker-Tuk-tuk.mp3",
+  "sounds/text/Hello-MyNameIsBjork.mp3",
   "sounds/My-Girl-is-Crying.mp3",
   "sounds/Old-Ladies-Pets.wav",
   "sounds/SR006F.wav",
@@ -193,7 +217,6 @@ const samplePaths = [
   "sounds/oh-so.mp3",
   "sounds/sample1.mp3",
   "sounds/text/Balkan-Central-Europe.mp3",
-  "sounds/text/Hello-MyNameIsBjork.mp3",
   "sounds/text/Cyberstress.mp3",
   "sounds/text/Bjork-Interview-1996.mp3",
   "sounds/text/Jodie-Foster-Gay-Silence.mp3",
@@ -206,7 +229,7 @@ const sampleGridCols = 5;
 const sampleGridRows = 4;
 let sampleGridLayout = [];
 let sampleGridLayoutKey = "";
-let selectedNote = "C3";
+let selectedNote = "A2";
 let selectedFilter = 0.5;
 let selectedSampleIndex = 0;
 
@@ -401,7 +424,7 @@ function drawFrame() {
   const body = BodyPoseTracker.getPrimaryPose(bodyPoses);
   updateBodyPosePoints(body);
   const trackedHands = HandTracker.getPerformanceHands(HandTracker.getSinglePerformerHands(hands));
-  const menuPoint = getHandControlPoint(trackedHands.rightHand) || getHandControlPoint(trackedHands.leftHand) || bodyRightWrist || bodyLeftWrist;
+  const menuPoint = getMenuSelectionPoint(trackedHands.leftHand, trackedHands.rightHand);
   updateModeDwellSelection(menuPoint);
   const leftHand = trackedHands.leftHand || createBodyHand(bodyLeftWrist, bodyLeftShoulder, "Left");
   const rightHand = trackedHands.rightHand || createBodyHand(bodyRightWrist, bodyRightShoulder, "Right");
@@ -452,6 +475,18 @@ function drawFrame() {
   visualSystem.drawParticles();
   drawBodyPosePoints();
   drawBodyModeInterface();
+}
+
+function getMenuSelectionPoint(leftHand, rightHand) {
+  const candidates = [
+    getHandControlPoint(leftHand),
+    getHandControlPoint(rightHand),
+    bodyLeftWrist,
+    bodyRightWrist,
+  ].filter(isFinitePoint);
+  const menuCandidates = candidates.filter((point) => point.y >= 0 && point.y <= modeActivationHitHeight);
+  if (menuCandidates.length) return menuCandidates.sort((a, b) => a.y - b.y)[0];
+  return candidates[0] || null;
 }
 
 function readAudioAnalysis() {
@@ -541,7 +576,7 @@ function updateBodyPosePointsFromHands() {
     bodyRightShoulder = smoothBodyPoint("rightShoulder", null);
   }
   if ((bodyLeftWrist || bodyRightWrist) && (!bodyPoseStarted || bodyPoseLoading || bodyPoseError)) {
-    activeInstructionText = activeMode ? activeMode + " active / clap to loop" : "select a sound";
+    if (millis() > instructionHoldUntil) activeInstructionText = getModeInstructionText(activeMode);
   }
   return foundHand;
 }
@@ -561,24 +596,40 @@ function updateModeDwellSelection(wrist) {
   hoverWrist = wrist;
   if (!hovered) {
     candidateMode = null;
+    candidateModeIsReset = false;
     dwellStartTime = 0;
     dwellProgress = 0;
-    if (!activeMode) activeInstructionText = "select a sound";
-    else activeInstructionText = activeMode + " active / clap to loop";
+    if (millis() > instructionHoldUntil) activeInstructionText = getModeInstructionText(activeMode);
     return;
   }
 
-  if (candidateMode !== hovered.mode) {
+  const isModeReset = hovered.mode === activeMode && hovered.mode !== "reset" && millis() - lastActivatedModeAt > 900;
+  if (candidateMode !== hovered.mode || candidateModeIsReset !== isModeReset) {
     candidateMode = hovered.mode;
+    candidateModeIsReset = isModeReset;
     dwellStartTime = millis();
     dwellProgress = 0;
   }
 
   dwellProgress = constrain((millis() - dwellStartTime) / modeDwellDuration, 0, 1);
   const remaining = max(1, ceil((modeDwellDuration - (millis() - dwellStartTime)) / 1000));
-  activeInstructionText = "loading... " + remaining;
+  activeInstructionText = isModeReset ? "clear " + hovered.mode + "... " + remaining : "loading... " + remaining;
 
-  if (dwellProgress >= 1) activateMode(candidateMode);
+  if (dwellProgress >= 1) {
+    if (candidateModeIsReset) resetSingleMode(candidateMode);
+    else activateMode(candidateMode);
+  }
+}
+
+function getModeInstructionText(mode) {
+  if (!mode) return "select a sound";
+  if (mode === "sample") return "samples on / clap to loop / hold button to stop";
+  return mode + " on / hold button again to stop";
+}
+
+function showInstruction(text, hold = 1700) {
+  activeInstructionText = text;
+  instructionHoldUntil = millis() + hold;
 }
 
 function getHoveredModeBox(wrist) {
@@ -589,29 +640,117 @@ function getHoveredModeBox(wrist) {
 }
 
 function activateMode(mode) {
+  if (mode === "reset") {
+    resetPerformance();
+    return;
+  }
   if (!mode || !modeToProcessKey[mode]) return;
   const nextKey = modeToProcessKey[mode];
   const previousKey = activeProcessKey;
   if (previousKey && previousKey !== nextKey) autoCaptureModeOnExit(previousKey);
   activeMode = mode;
+  lastActivatedMode = mode;
+  lastActivatedModeAt = millis();
   activeProcessKey = nextKey;
   candidateMode = null;
+  candidateModeIsReset = false;
   dwellStartTime = 0;
   dwellProgress = 0;
-  activeInstructionText = mode + " activated";
+  showInstruction(getModeInstructionText(mode), 900);
   if (activeProcessKey === "loopCreator") lastLiveDroneAt = -Infinity;
   if (activeProcessKey === "space") lastLiveLeadAt = -Infinity;
   if (activeProcessKey === "motion") lastLivePercussionAt = -Infinity;
   if (activeProcessKey === "texture") lastLiveClickAt = -Infinity;
   if (!audioReady && !audioStarting) startAudioFromHands();
+  ensureModeBackgroundLoop(activeProcessKey);
+}
+
+function resetSingleMode(mode) {
+  if (!mode || !modeToProcessKey[mode]) return;
+  const key = modeToProcessKey[mode];
+  loopMemories = loopMemories.filter((memory) => memory.key !== key);
+  savedBlocks = savedBlocks.filter((block) => block.key !== key);
+  if (key === "decay") {
+    pendingSampleLoopEvent = null;
+    lastSampleEvents = { left: null, right: null };
+    if (audioEngine && audioEngine.sampleEngine && typeof Tone !== "undefined") {
+      try {
+        audioEngine.stopSampleLoop(Tone.now());
+        for (const voice of Array.from(audioEngine.sampleEngine.activeVoices || [])) voice.stop(Tone.now());
+      } catch (error) {}
+    }
+  }
+  if (key === "loopCreator" && audioEngine && audioEngine.loopEngine && audioEngine.loopEngine.voice && typeof Tone !== "undefined") {
+    try {
+      for (const note of audioEngine.loopEngine.activeDroneNotes || []) audioEngine.loopEngine.voice.triggerRelease(note, Tone.now());
+      audioEngine.loopEngine.activeDroneNotes = [];
+    } catch (error) {}
+  }
+  if (activeMode === mode) {
+    activeMode = null;
+    activeProcessKey = null;
+  }
+  candidateMode = null;
+  candidateModeIsReset = false;
+  dwellStartTime = 0;
+  dwellProgress = 0;
+  showInstruction(mode + " stopped");
 }
 
 function autoCaptureModeOnExit(key) {
+  if (key === "decay") {
+    autoCaptureSampleLoopsOnExit();
+    return;
+  }
   if (!["loopCreator", "motion", "texture", "space"].includes(key)) return;
   const event = lastGestureEvents[key];
   if (!event) return;
   storeGestureLoop(key, event, true);
-  activeInstructionText = key === "loopCreator" ? "drone remembered" : key === "motion" ? "percussion remembered" : key === "texture" ? "click remembered" : "lead remembered";
+  showInstruction(key === "loopCreator" ? "drone remembered" : key === "motion" ? "percussion remembered" : key === "texture" ? "click remembered" : "lead remembered");
+}
+
+function autoCaptureSampleLoopsOnExit() {
+  const captured = [];
+  for (const side of ["left", "right"]) {
+    const state = sampleHandStates[side];
+    const gridCell = selectedSampleGridCells[side] !== null
+      ? selectedSampleGridCells[side]
+      : state && state.cell !== null
+        ? state.cell
+        : lastSampleEvents[side]
+          ? lastSampleEvents[side].gridCell
+          : null;
+    if (gridCell === null || captured.includes(gridCell)) continue;
+    const point = getSampleGridCellCenter(gridCell);
+    const event = {
+      ...createSampleEvent(point, constrain(gridCell, 0, samplePaths.length - 1), gridCell, 1, side),
+      liveSample: false,
+      loopPlayback: true,
+    };
+    updatePersistentSampleLoop(event, side);
+    captured.push(gridCell);
+  }
+  if (captured.length) showInstruction(captured.length === 1 ? "sample kept looping" : "samples kept looping");
+}
+
+function ensureModeBackgroundLoop(key) {
+  if (!key || key === "decay") return;
+  if (loopMemories.some((memory) => memory.key === key && memory.background)) return;
+  const rightPoint = bodyRightWrist || bodyLeftWrist || { x: width * 0.62, y: height * 0.56 };
+  const leftPoint = bodyLeftWrist || bodyRightWrist || { x: width * 0.38, y: height * 0.58 };
+  const rightHand = createBodyHand(rightPoint, bodyRightShoulder || bodyLeftShoulder, "Right");
+  const leftHand = createBodyHand(leftPoint, bodyLeftShoulder || bodyRightShoulder, "Left");
+  const event = createGestureEvent(key, rightHand, leftHand);
+  if (!event) return;
+  lastGestureEvents[key] = event;
+  updatePersistentBackgroundLoop(key, event);
+  if (audioReady && audioEngine) {
+    try {
+      audioEngine.playGestureEvent(key === "motion" ? { ...event, probability: 1, accent: true, velocity: event.velocity * 1.18 } : event, Tone.now(), key === "texture" ? 0.58 : 0.9);
+    } catch (error) {
+      console.error(error);
+    }
+  }
 }
 
 function detectClap(leftWrist, rightWrist, leftShoulder, rightShoulder) {
@@ -640,7 +779,7 @@ function detectClap(leftWrist, rightWrist, leftShoulder, rightShoulder) {
   if (wristDistance < closeThreshold && !isClapActive && now - lastClapTime > clapCooldown && (previous === null || previous > apartThreshold || closingSpeed > 0.24)) {
     isClapActive = true;
     lastClapTime = now;
-    activeInstructionText = activeMode ? "clap: " + activeMode : "select a mode first";
+    showInstruction(activeMode === "sample" ? "clap: sample" : getModeInstructionText(activeMode), 900);
     return true;
   }
   return false;
@@ -651,7 +790,7 @@ function handleClap(mode, rightHand, leftHand) {
   if (!audioReady && !audioStarting) startAudioFromHands();
   const key = modeToProcessKey[mode];
   if (key === "space" || key === "loopCreator" || key === "motion" || key === "texture") {
-    activeInstructionText = key === "space" ? "lead is live only" : mode + " remembers on exit";
+    showInstruction(key === "space" ? "lead is live only" : mode + " remembers on exit");
     return;
   }
   if (key === "decay") {
@@ -659,11 +798,15 @@ function handleClap(mode, rightHand, leftHand) {
   } else {
     triggerSelectedNote(rightHand, leftHand, key);
   }
-  activeInstructionText = mode + " loop stored";
+  showInstruction(mode + " loop stored");
 }
 
 function createModeGesture(mode, point) {
-  if (!mode || !modeToProcessKey[mode] || !isFinitePoint(point)) return null;
+  if (!mode || !modeToProcessKey[mode]) return null;
+  if (!isFinitePoint(point)) {
+    if (mode !== "drone") return null;
+    point = { x: width * 0.5, y: height * 0.58 };
+  }
   const index = modeButtons.findIndex((item) => item.mode === mode);
   const count = max(1, index + 1);
   return {
@@ -738,7 +881,12 @@ function drawModeButtons() {
   for (let i = 0; i < modeButtons.length; i++) {
     const item = modeButtons[i];
     const x = i * boxW;
-    if (activeMode === item.mode) {
+    const isLooped = item.key && item.key !== "reset" && hasLoopForKey(item.key);
+    if (isLooped) {
+      noStroke();
+      fill(210, 28, 24);
+      rect(x, y, boxW, modeButtonHeight);
+    } else if (activeMode === item.mode) {
       noStroke();
       fill(126);
       rect(x, y, boxW, modeButtonHeight);
@@ -753,47 +901,201 @@ function drawModeButtons() {
       rect(x, y, boxW * dwellProgress, modeButtonHeight);
     }
     noStroke();
-    fill(activeMode === item.mode || (candidateMode === item.mode && dwellProgress > 0) ? 0 : 190);
+    fill(isLooped || activeMode === item.mode || (candidateMode === item.mode && dwellProgress > 0) ? 0 : 190);
     text(item.mode, x + boxW / 2, y + modeButtonHeight / 2);
   }
   textAlign(LEFT, BASELINE);
 }
 
+function hasLoopForKey(key) {
+  return !!key && loopMemories.some((memory) => memory.key === key && memory.background);
+}
+
 function drawBodyPosePoints() {
   noStroke();
+  if (activeProcessKey === "space") return;
+  if (activeProcessKey === "loopCreator" || activeProcessKey === "texture") {
+    const hasVisibleHand = isFinitePoint(bodyLeftWrist) || isFinitePoint(bodyRightWrist);
+    if (activeProcessKey === "texture" && !hasVisibleHand) return;
+    updateDroneCursorTrace();
+    const scale = activeProcessKey === "loopCreator" ? 0.34 : 0.24;
+    const intensity = activeProcessKey === "loopCreator" ? 0.72 : 0.34;
+    if (isFinitePoint(bodyLeftWrist)) drawDroneCursor(bodyLeftWrist, "left", scale, intensity);
+    if (isFinitePoint(bodyRightWrist)) drawDroneCursor(bodyRightWrist, "right", scale, intensity);
+    return;
+  }
   if (isFinitePoint(bodyLeftWrist)) {
-    drawHandEchoPoint(bodyLeftWrist, getHandMarkerColor("left"), 0);
+    drawHandEchoPoint(bodyLeftWrist, "left", 0);
   }
   if (isFinitePoint(bodyRightWrist)) {
-    drawHandEchoPoint(bodyRightWrist, getHandMarkerColor("right"), 1.7);
+    drawHandEchoPoint(bodyRightWrist, "right", 1.7);
   }
 }
 
 function getHandMarkerColor(side) {
   if (activeProcessKey === "space") return color(255, 36, 30);
   if (activeProcessKey === "texture" && side === "left") return color(35, 112, 255);
-  if (activeProcessKey === "texture") return color(255, 255, 255);
+  if (activeProcessKey === "texture") return color(0);
   if (side === "left") return color(35, 112, 255);
   return color(255, 214, 26);
 }
 
-function drawHandEchoPoint(point, pointColor, phase) {
+function drawHandEchoPoint(point, side, phase) {
   const pulse = (sin(frameCount * 0.18 + phase) + 1) * 0.5;
-  noFill();
-  for (let echo = 0; echo < 4; echo++) {
-    stroke(red(pointColor), green(pointColor), blue(pointColor), 142 - echo * 27);
-    strokeWeight(max(0.7, 1.9 - echo * 0.24));
-    beginShape();
-    const radius = 14 + echo * 13 + pulse * 7;
-    for (let a = 0; a <= TWO_PI + 0.14; a += 0.2) {
-      const wobble = (noise(cos(a) + phase, sin(a) + echo, frameCount * 0.012) - 0.5) * (8 + echo * 3);
-      vertex(point.x + cos(a) * (radius + wobble), point.y + sin(a) * (radius + wobble));
-    }
-    endShape(CLOSE);
-  }
+  const trail = handEchoTrails[side] || [];
+  trail.push({ x: point.x, y: point.y, life: 1, phase, seed: random(1000) });
+  while (trail.length > 32) trail.shift();
+  handEchoTrails[side] = trail;
+
   noStroke();
-  fill(red(pointColor), green(pointColor), blue(pointColor), 230);
-  circle(point.x, point.y, 7 + pulse * 2);
+  for (let i = 0; i < trail.length; i++) {
+    const item = trail[i];
+    const age = i / max(1, trail.length - 1);
+    const fade = pow(age, 1.28) * item.life;
+    const shift = (1 - age) * 34;
+    const driftX = (noise(item.seed, frameCount * 0.018) - 0.5) * 42 * (1 - age);
+    const driftY = (noise(item.seed + 20, frameCount * 0.018) - 0.5) * 32 * (1 - age);
+    const size = 16 + pulse * 5 + age * 22;
+    for (let layer = 0; layer < 8; layer++) {
+      const layerScale = 4.9 - layer * 0.52;
+      const layerAlpha = (3 + layer * 4.4) * fade;
+      const offset = shift * (1.25 - layer * 0.11);
+      fill(255, 32, 28, layerAlpha);
+      circle(
+        item.x + offset + driftX * (1 - layer * 0.08),
+        item.y - offset * 0.55 + driftY * (1 - layer * 0.08),
+        size * layerScale
+      );
+    }
+    if (i % 2 === 0) {
+      const fragmentCount = 5;
+      for (let f = 0; f < fragmentCount; f++) {
+        const scatter = (1 - age) * random(14, 86);
+        const angle = random(TWO_PI);
+        fill(255, 32, 28, 26 * fade);
+        rect(
+          item.x + driftX + cos(angle) * scatter,
+          item.y + driftY + sin(angle) * scatter,
+          random([1, 2, 3]),
+          random([1, 2, 3])
+        );
+      }
+    }
+  }
+  fill(255, 32, 28, 8);
+  circle(point.x, point.y, 104 + pulse * 18);
+  fill(255, 32, 28, 14);
+  circle(point.x, point.y, 72 + pulse * 14);
+  fill(255, 32, 28, 28);
+  circle(point.x, point.y, 46 + pulse * 10);
+  fill(255, 32, 28, 72);
+  circle(point.x, point.y, 27 + pulse * 6);
+  fill(255, 32, 28, 230);
+  circle(point.x, point.y, 13 + pulse * 3);
+}
+
+function makeDroneCursorCloud(side) {
+  const cloud = [];
+  for (let i = 0; i < 950; i++) {
+    const a = random(TWO_PI);
+    const noiseShape = 120 + noise(cos(a) * 1.4 + 10, sin(a) * 1.4 + 10) * 95 + random(-45, 45);
+    const r = random(40, noiseShape);
+    if (r < 75 && random() < 0.82) continue;
+    const clump = noise(cos(a) * 3.5 + (side === "left" ? 5 : 13), sin(a) * 3.5);
+    if (random() > clump * 0.9) continue;
+    cloud.push({
+      x: cos(a) * r + random(-18, 18),
+      y: sin(a) * r + random(-18, 18),
+      s: random([2, 2, 3, 3, 4, 6]),
+      phase: random(TWO_PI),
+      pulse: random(0.02, 0.09),
+      drift: random(0.2, 1.8),
+    });
+  }
+  droneCursorClouds[side] = cloud;
+}
+
+function drawDroneCursor(point, side, scale = 0.34, intensity = 0.72) {
+  if (!droneCursorClouds[side] || !droneCursorClouds[side].length) makeDroneCursorCloud(side);
+  const previous = previousDroneCursorPoints[side] || point;
+  const speed = dist(point.x, point.y, previous.x, previous.y);
+  if (speed > 0.5) addDroneDiffusedTrace(previous, point, speed * intensity, scale);
+  previousDroneCursorPoints[side] = { x: point.x, y: point.y };
+  const cursorValue = activeProcessKey === "texture" ? 0 : 255;
+  noStroke();
+  for (const p of droneCursorClouds[side]) {
+    const n = noise(p.x * 0.012 + frameCount * 0.015, p.y * 0.012);
+    const sparkle = sin(frameCount * p.pulse + p.phase);
+    const glitch = random() < 0.025;
+    let alpha = (map(sparkle, -1, 1, 35, 230) + speed * 6) * intensity;
+    if (glitch) alpha = 255;
+    if (random() < 0.025) alpha *= 0.15;
+    const wobbleX = map(n, 0, 1, -8, 8) + random(-1.5, 1.5);
+    const wobbleY = map(n, 0, 1, 8, -8) + random(-1.5, 1.5);
+    const x = snapDroneCursor(point.x + (p.x + wobbleX) * scale);
+    const y = snapDroneCursor(point.y + (p.y + wobbleY) * scale);
+    fill(cursorValue, constrain(alpha, 0, 255));
+    rect(x, y, p.s, p.s);
+    if (random() < 0.006 * intensity) {
+      fill(cursorValue, 240);
+      rect(x + random([-droneCursorGrid, droneCursorGrid, 0]), y, p.s * 2, p.s * 2);
+    }
+  }
+}
+
+function addDroneDiffusedTrace(previous, current, speed, scale = 0.34) {
+  const amount = constrain(speed * 1.4, 4, 45);
+  const moveAngle = atan2(current.y - previous.y, current.x - previous.x);
+  for (let i = 0; i < amount; i++) {
+    const t = random();
+    const baseX = lerp(previous.x, current.x, t);
+    const baseY = lerp(previous.y, current.y, t);
+    const sideAngle = moveAngle + HALF_PI * random([-1, 1]);
+    const scatter = random(5, 75) * random() * scale;
+    const backscatter = random(-35, 25) * scale;
+    droneCursorTrace.push({
+      x: baseX + cos(sideAngle) * scatter + cos(moveAngle) * backscatter + random(-18, 18) * scale,
+      y: baseY + sin(sideAngle) * scatter + sin(moveAngle) * backscatter + random(-18, 18) * scale,
+      vx: random(-0.7, 0.7),
+      vy: random(-0.7, 0.7),
+      s: random([2, 2, 3, 3, 4, 6]),
+      life: random(25, 90),
+      maxLife: random(60, 120),
+      flicker: random(TWO_PI),
+    });
+  }
+}
+
+function updateDroneCursorTrace() {
+  noStroke();
+  const cursorValue = activeProcessKey === "texture" ? 0 : 255;
+  for (let i = droneCursorTrace.length - 1; i >= 0; i--) {
+    const p = droneCursorTrace[i];
+    const fade = p.life / p.maxLife;
+    const sparkle = sin(frameCount * 0.2 + p.flicker);
+    const alpha = 210 * fade + sparkle * 30;
+    p.vx += random(-0.08, 0.08);
+    p.vy += random(-0.08, 0.08);
+    p.x += p.vx;
+    p.y += p.vy;
+    if (random() < 0.04) {
+      p.x += random([-droneCursorGrid, droneCursorGrid, droneCursorGrid * 2, -droneCursorGrid * 2]);
+      p.y += random([-droneCursorGrid, droneCursorGrid, droneCursorGrid * 2, -droneCursorGrid * 2]);
+    }
+    fill(cursorValue, constrain(alpha, 0, 255));
+    rect(snapDroneCursor(p.x), snapDroneCursor(p.y), p.s, p.s);
+    if (random() < 0.08 * fade) {
+      fill(cursorValue, alpha * 0.55);
+      rect(snapDroneCursor(p.x + random(-20, 20)), snapDroneCursor(p.y + random(-20, 20)), random([1, 2, 3]), random([1, 2, 3]));
+    }
+    p.life--;
+    if (p.life <= 0) droneCursorTrace.splice(i, 1);
+  }
+  if (droneCursorTrace.length > 1800) droneCursorTrace.splice(0, droneCursorTrace.length - 1800);
+}
+
+function snapDroneCursor(value) {
+  return round(value / droneCursorGrid) * droneCursorGrid;
 }
 
 function updateAudioSafely(gesturePoint) {
@@ -820,6 +1122,7 @@ function updateLiveLead() {
   if (!rightHand) return;
   const event = createGestureEvent("space", rightHand, leftHand);
   lastGestureEvents.space = event;
+  updatePersistentBackgroundLoop("space", event);
   audioEngine.playGestureEvent(event, Tone.now(), 0.82);
   visualSystem.createEventParticle(event);
   lastLiveLeadAt = millis();
@@ -832,33 +1135,98 @@ function updateLivePercussion() {
   if (!rightHand && !leftHand) return;
   const event = createGestureEvent("motion", rightHand, leftHand);
   lastGestureEvents.motion = event;
+  updatePersistentBackgroundLoop("motion", event);
   const liveAccent = millis() - lastLivePercussionAt > 620 || event.subdivision <= 2;
-  audioEngine.playGestureEvent({ ...event, probability: 1, accent: liveAccent, velocity: event.velocity * 1.08 }, Tone.now(), 0.86);
+  audioEngine.playGestureEvent({ ...event, probability: 1, accent: liveAccent, velocity: event.velocity * 1.28 }, Tone.now(), 1);
   visualSystem.createEventParticle(event);
   lastLivePercussionAt = millis();
 }
 
 function updateLiveClickPattern() {
-  if (activeProcessKey !== "texture" || millis() - lastLiveClickAt < 210) return;
+  if (activeProcessKey !== "texture" || millis() - lastLiveClickAt < 260) return;
   const rightHand = createBodyHand(bodyRightWrist || bodyLeftWrist, bodyRightShoulder || bodyLeftShoulder, "Right");
   const leftHand = createBodyHand(bodyLeftWrist, bodyLeftShoulder, "Left");
   if (!rightHand && !leftHand) return;
   const event = createGestureEvent("texture", rightHand, leftHand);
   lastGestureEvents.texture = event;
-  audioEngine.playGestureEvent({ ...event, velocity: event.velocity * 0.78 }, Tone.now(), 0.62);
+  updatePersistentBackgroundLoop("texture", event);
+  audioEngine.playGestureEvent({ ...event, velocity: event.velocity * 0.82, probability: max(event.probability || 0.4, 0.72) }, Tone.now(), 0.68);
   visualSystem.createEventParticle(event);
   lastLiveClickAt = millis();
 }
 
 function updateLiveOneFingerDrone() {
-  if (activeProcessKey !== "loopCreator" || millis() - lastLiveDroneAt < 620) return;
-  const rightHand = createBodyHand(bodyRightWrist || bodyLeftWrist, bodyRightShoulder || bodyLeftShoulder, "Right");
+  if (activeProcessKey !== "loopCreator" || millis() - lastLiveDroneAt < 260) return;
+  const fallbackPoint = { x: width * 0.5, y: height * 0.58 };
+  const rightHand = createBodyHand(bodyRightWrist || bodyLeftWrist || fallbackPoint, bodyRightShoulder || bodyLeftShoulder, "Right");
+  const leftHand = createBodyHand(bodyLeftWrist || bodyRightWrist || fallbackPoint, bodyLeftShoulder || bodyRightShoulder, "Left");
   if (!rightHand) return;
-  const event = createGestureEvent("loopCreator", rightHand, null);
+  const event = createGestureEvent("loopCreator", rightHand, leftHand);
   lastGestureEvents.loopCreator = event;
-  event.velocity = constrain(map(selectedFilter, 0, 1, 0.28, 0.76), 0.22, 0.82);
+  event.velocity = constrain(map(selectedFilter, 0, 1, 0.46, 0.82), 0.42, 0.86);
+  updatePersistentBackgroundLoop("loopCreator", event);
   audioEngine.playGestureEvent(event, Tone.now(), 0.82);
   lastLiveDroneAt = millis();
+}
+
+function updatePersistentBackgroundLoop(key, event) {
+  if (!key || !event || !["loopCreator", "motion", "texture", "space"].includes(key)) return;
+  const memoryEvents = key === "motion"
+    ? createRegularPercussionEvents(event)
+    : key === "texture"
+      ? createClickPatternEvents(event)
+      : key === "space"
+        ? createLeadLoopEvents(event)
+        : [event];
+  let memory = loopMemories.find((item) => item.key === key && item.background);
+  if (!memory) {
+    memory = {
+      id: millis() + "-" + key,
+      key,
+      events: memoryEvents,
+      params: { ...layers[key].params, depth: key === "loopCreator" ? layers.loopCreator.params.depth : selectedFilter },
+      pattern: null,
+      savedAt: millis(),
+      cycleCount: 0,
+      maxCycles: Infinity,
+      lastCycleStep: 0,
+      fading: false,
+      background: true,
+      nextPatternUpdateAt: millis() + backgroundPatternUpdateInterval,
+    };
+    loopMemories.push(memory);
+    pruneLoopMemories();
+    visualSystem.createSavedBlock(memory);
+    showInstruction(getModeNameForKey(key) + " loop created");
+    return;
+  }
+  const now = millis();
+  const patternInterval = key === "loopCreator" ? backgroundPatternUpdateInterval * 1.5 : backgroundPatternUpdateInterval;
+  if (!memory.nextPatternUpdateAt || now >= memory.nextPatternUpdateAt) {
+    memory.events = memoryEvents;
+    memory.nextPatternUpdateAt = now + patternInterval;
+  } else if (key === "loopCreator" && memory.events.length) {
+    memory.events[0] = {
+      ...memory.events[0],
+      filterValue: event.filterValue,
+      texture: event.texture,
+      instability: event.instability,
+      space: event.space,
+      velocity: event.velocity,
+      pan: event.pan,
+      visualX: event.visualX,
+      visualY: event.visualY,
+    };
+  }
+  memory.params = { ...layers[key].params, depth: key === "loopCreator" ? layers.loopCreator.params.depth : selectedFilter };
+  memory.savedAt = now;
+  memory.cycleCount = 0;
+  memory.fading = false;
+}
+
+function getModeNameForKey(key) {
+  const item = modeButtons.find((button) => button.key === key);
+  return item ? item.mode : key;
 }
 
 function drawFallbackFrame() {
@@ -960,11 +1328,35 @@ function flushPendingSampleLoop() {
   }
 }
 
+function getTopModeButtonAt(x, y) {
+  if (y < instructionBarHeight || y > performanceTop) return null;
+  const index = floor(constrain(map(x, 0, width, 0, modeButtons.length), 0, modeButtons.length - 0.001));
+  return modeButtons[index] || null;
+}
+
 function mousePressed() {
+  const clickedModeButton = getTopModeButtonAt(mouseX, mouseY);
+  if (clickedModeButton && clickedModeButton.action === "reset") {
+    resetPerformance();
+    return;
+  }
+  if (clickedModeButton && clickedModeButton.mode === activeMode) {
+    resetSingleMode(clickedModeButton.mode);
+    return;
+  }
   startAudio(true);
 }
 
 function touchStarted() {
+  const clickedModeButton = getTopModeButtonAt(mouseX, mouseY);
+  if (clickedModeButton && clickedModeButton.action === "reset") {
+    resetPerformance();
+    return false;
+  }
+  if (clickedModeButton && clickedModeButton.mode === activeMode) {
+    resetSingleMode(clickedModeButton.mode);
+    return false;
+  }
   startAudio(true);
   return false;
 }
@@ -1098,44 +1490,44 @@ function updateControlAxes(leftHand, rightHand, activeFinger) {
 function updatePercussionTwoHandControls(leftHand, rightHand) {
   const leftPoint = getHandControlPoint(leftHand) || getIndexPoint(leftHand);
   const rightPoint = getHandControlPoint(rightHand) || getIndexPoint(rightHand);
-  const rhythmPoint = leftPoint || rightPoint;
-  const soundPoint = rightPoint || leftPoint;
-  if (isFinitePoint(rhythmPoint)) {
-    percussionSubdivisionValue = constrain(map(rhythmPoint.x, 0, width, 0, 1), 0, 1);
-    percussionDensityValue = constrain(map(rhythmPoint.y, height, performanceTop, 0, 1), 0, 1);
-  }
-  if (isFinitePoint(soundPoint)) {
-    selectedFilter = constrain(map(soundPoint.x, width * 0.08, width * 0.92, 0, 1), 0, 1);
-    const noteIndex = floor(constrain(map(soundPoint.y, height * 0.92, performanceTop + 4, 0, fixedScale.length), 0, fixedScale.length - 0.001));
+  if (isFinitePoint(rightPoint)) {
+    percussionDensityValue = constrain(map(rightPoint.x, width * 0.06, width * 0.94, 0, 1), 0, 1);
+    percussionToneValue = constrain(map(rightPoint.y, height * 0.94, performanceTop, 0, 1), 0, 1);
+    const noteIndex = floor(constrain(map(percussionToneValue, 0, 1, 0, fixedScale.length), 0, fixedScale.length - 0.001));
     selectedNote = fixedScale[noteIndex];
   }
+  if (isFinitePoint(leftPoint)) {
+    percussionNoiseMixValue = constrain(map(leftPoint.x, width * 0.06, width * 0.94, 0, 1), 0, 1);
+    percussionPressureValue = constrain(map(leftPoint.y, height * 0.94, performanceTop, 0, 1), 0, 1);
+    selectedFilter = percussionPressureValue;
+  }
   const layer = layers.motion;
-  layer.target.density = constrain(0.12 + percussionDensityValue * 0.78, 0.08, 0.92);
-  layer.target.variation = constrain(0.08 + percussionSubdivisionValue * 0.72, 0.08, 0.82);
+  layer.target.density = constrain(0.28 + percussionDensityValue * 0.72, 0.24, 1);
+  layer.target.variation = constrain(0.16 + percussionNoiseMixValue * 0.84, 0.12, 1);
   layer.target.depth = selectedFilter;
-  layer.target.chance = constrain(0.08 + percussionDensityValue * 0.38, 0.06, 0.48);
+  layer.target.chance = constrain(0.14 + percussionPressureValue * 0.42 + percussionNoiseMixValue * 0.32, 0.1, 0.88);
 }
 
 function updateClickTwoHandControls(leftHand, rightHand) {
   const leftPoint = getHandControlPoint(leftHand) || getIndexPoint(leftHand);
   const rightPoint = getHandControlPoint(rightHand) || getIndexPoint(rightHand);
-  const patternPoint = leftPoint || rightPoint;
-  const texturePoint = rightPoint || leftPoint;
-  if (isFinitePoint(patternPoint)) {
-    clickPatternValue = constrain(map(patternPoint.x, 0, width, 0, 1), 0, 1);
-    clickDensityValue = constrain(map(patternPoint.y, height, performanceTop, 0, 1), 0, 1);
-  }
-  if (isFinitePoint(texturePoint)) {
-    clickHarmonyValue = constrain(map(texturePoint.x, 0, width, 0, 1), 0, 1);
-    selectedFilter = constrain(map(texturePoint.y, height, performanceTop, 0.08, 1), 0.08, 1);
-    const noteIndex = floor(constrain(map(texturePoint.x, 0, width, 0, fixedScale.length), 0, fixedScale.length - 0.001));
+  if (isFinitePoint(rightPoint)) {
+    clickHarmonyValue = constrain(map(rightPoint.x, width * 0.06, width * 0.94, 0, 1), 0, 1);
+    clickDensityValue = constrain(map(rightPoint.y, height * 0.94, performanceTop, 0.08, 1), 0.08, 1);
+    const noteIndex = floor(constrain(map(clickDensityValue, 0, 1, 0, fixedScale.length), 0, fixedScale.length - 0.001));
     selectedNote = fixedScale[noteIndex];
   }
+  if (isFinitePoint(leftPoint)) {
+    clickGlitchValue = constrain(map(leftPoint.x, width * 0.06, width * 0.94, 0, 1), 0, 1);
+    clickSpaceValue = constrain(map(leftPoint.y, height * 0.94, performanceTop, 0, 1), 0, 1);
+    selectedFilter = constrain(0.2 + clickSpaceValue * 0.8, 0.2, 1);
+  }
+  clickPatternValue = clickGlitchValue;
   const layer = layers.texture;
-  layer.target.density = constrain(0.1 + clickDensityValue * 0.82, 0.08, 0.95);
-  layer.target.variation = constrain(0.08 + clickPatternValue * 0.78, 0.08, 0.9);
+  layer.target.density = constrain(0.34 + clickDensityValue * 0.66, 0.28, 1);
+  layer.target.variation = constrain(0.12 + clickGlitchValue * 0.88, 0.1, 1);
   layer.target.depth = selectedFilter;
-  layer.target.chance = constrain(0.04 + clickDensityValue * 0.32, 0.03, 0.42);
+  layer.target.chance = constrain(0.12 + clickSpaceValue * 0.58 + clickGlitchValue * 0.28, 0.08, 0.95);
 }
 
 function updateLeadTwoHandControls(leftHand, rightHand) {
@@ -1175,21 +1567,19 @@ function updateDroneTwoHandControls(leftHand, rightHand) {
   if (isFinitePoint(rightPoint)) {
     const chordPosition = map(rightPoint.x, 0, width, 0, droneChordBank.length);
     selectedDroneChordIndex = floor(constrain(chordPosition, 0, droneChordBank.length - 0.001));
-  }
-  if (isFinitePoint(leftPoint)) {
-    const rawFilter = constrain(map(leftPoint.y, height * 0.96, performanceTop, 0, 1), 0, 1);
-    selectedFilter = pow(rawFilter, 0.58);
+    const rawBrightness = constrain(map(rightPoint.y, height * 0.96, performanceTop, 0.12, 1), 0.12, 1);
+    selectedFilter = pow(rawBrightness, 0.62);
   }
   const layer = layers.loopCreator;
   if (!layer) return;
   const rightX = isFinitePoint(rightPoint) ? constrain(map(rightPoint.x, 0, width, 0, 1), 0, 1) : 0.5;
   const rightY = isFinitePoint(rightPoint) ? constrain(map(rightPoint.y, height, performanceTop, 0, 1), 0, 1) : 0.35;
   const leftX = isFinitePoint(leftPoint) ? constrain(map(leftPoint.x, 0, width, 0, 1), 0, 1) : 0.35;
-  const leftY = isFinitePoint(leftPoint) ? constrain(map(leftPoint.y, height, performanceTop, 0, 1), 0, 1) : selectedFilter;
+  const leftY = isFinitePoint(leftPoint) ? constrain(map(leftPoint.y, height, performanceTop, 0.12, 1), 0.12, 1) : selectedFilter;
   layer.target.depth = selectedFilter;
-  layer.target.variation = constrain(0.12 + leftX * 0.62 + rightX * 0.24, 0.08, 0.95);
-  layer.target.density = constrain(0.14 + rightY * 0.44 + rightX * 0.18, 0.1, 0.78);
-  layer.target.chance = constrain(0.06 + leftX * 0.52 + leftY * 0.22, 0.04, 0.72);
+  layer.target.variation = constrain(0.18 + leftX * 0.82, 0.16, 1);
+  layer.target.density = constrain(0.3 + rightY * 0.48 + rightX * 0.08, 0.26, 0.86);
+  layer.target.chance = constrain(0.16 + leftY * 0.74 + leftX * 0.1, 0.14, 1);
 }
 
 function getAxisControlPoint(key, leftHand, rightHand, activeFinger) {
@@ -1288,6 +1678,7 @@ function updateSampleGrid(leftHand, rightHand, activeFinger) {
       selectedSampleGridCell = null;
       selectedSampleGridCells = { left: null, right: null };
       lastSampleGridCells = { left: null, right: null };
+      resetSampleHandStates();
     }
     sampleModeWasActive = false;
     return;
@@ -1296,32 +1687,61 @@ function updateSampleGrid(leftHand, rightHand, activeFinger) {
 
   updateSampleHandCell("left", leftHand);
   updateSampleHandCell("right", rightHand);
+  if (selectedSampleGridCells.left !== null && selectedSampleGridCells.left === selectedSampleGridCells.right) {
+    selectedSampleGridCell = selectedSampleGridCells.left;
+  }
 }
 
 function updateSampleHandCell(side, hand) {
   const point = getSampleGridPoint(hand, { processKey: "decay" });
   if (!isFinitePoint(point)) {
     selectedSampleGridCells[side] = null;
+    sampleHandStates[side].cell = null;
     return;
   }
 
   const gridCell = getSampleGridCell(point);
   if (gridCell === null) {
     selectedSampleGridCells[side] = null;
+    sampleHandStates[side].cell = null;
     return;
   }
   const cell = constrain(gridCell, 0, samplePaths.length - 1);
-  const shouldPlay = gridCell !== lastSampleGridCells[side];
+  const state = sampleHandStates[side];
+  const now = millis();
+  if (state.cell !== gridCell) {
+    state.cell = gridCell;
+    state.enteredAt = now;
+    state.activatedCell = null;
+  }
+  const otherSide = side === "left" ? "right" : "left";
+  const otherState = sampleHandStates[otherSide];
+  const otherHandAlreadyPlayedThisCell = otherState
+    && otherState.activatedCell === gridCell
+    && now - otherState.lastTriggerAt < sampleSameCellCooldown;
+  const sameCellCooldown = state.activatedCell === gridCell ? sampleSameCellCooldown : sampleRetriggerCooldown;
+  const shouldPlay = now - state.enteredAt >= sampleHoldDuration
+    && now - state.lastTriggerAt >= sameCellCooldown
+    && !otherHandAlreadyPlayedThisCell;
 
   selectedSampleIndex = cell;
   selectedSampleGridCell = gridCell;
   selectedSampleGridCells[side] = gridCell;
+  lastSampleGridCell = gridCell;
   if (shouldPlay) {
     lastSampleGridCells[side] = gridCell;
-    lastSampleGridCell = gridCell;
     lastSampleGridAt = millis();
+    state.lastTriggerAt = now;
+    state.activatedCell = gridCell;
     lastSampleEvents[side] = triggerSampleGridCell(point, cell, 1, gridCell, side);
   }
+}
+
+function resetSampleHandStates() {
+  sampleHandStates = {
+    left: { cell: null, enteredAt: 0, lastTriggerAt: -Infinity, activatedCell: null },
+    right: { cell: null, enteredAt: 0, lastTriggerAt: -Infinity, activatedCell: null },
+  };
 }
 
 function triggerSampleGridCell(point, cell, repeatCount = 1, gridCell = getSampleGridCell(point), handSide = "right") {
@@ -1331,6 +1751,7 @@ function triggerSampleGridCell(point, cell, repeatCount = 1, gridCell = getSampl
   visualSystem.createEventParticle(event);
   try {
     playOrQueueGestureEvent(event, 1);
+    showInstruction((handSide === "left" ? "left" : "right") + " sample playing", 900);
   } catch (error) {
     systemMessage = "sample event skipped";
     console.error(error);
@@ -1359,9 +1780,71 @@ function createSampleEvent(point, cell, gridCell, repeatCount = 1, handSide = "r
     gridCell,
     repeatCount,
     handSide,
-    playbackRate: constrain(0.88 + textureByX * 0.24, 0.82, 1.16),
+    playbackRate: getSharedSamplePlaybackRate(textureByX),
+    liveSample: true,
+    organismSeed: gridCell * 97 + (handSide === "left" ? 17 : 43) + millis() * 0.001,
     triggeredAt: millis(),
   };
+}
+
+function getSharedSamplePlaybackRate(value) {
+  const rates = [0.75, 0.84, 1, 1.125, 1.2];
+  const index = floor(constrain(map(value, 0, 1, 0, rates.length), 0, rates.length - 0.001));
+  return rates[index];
+}
+
+function updatePersistentSampleLoop(event, handSide = event.handSide || "right") {
+  if (!event || event.type !== "sample") return;
+  const slot = handSide === "left" ? "left" : "right";
+  const id = "sample-bg-" + slot;
+  const loopEvent = {
+    ...event,
+    liveSample: false,
+    loopPlayback: true,
+    time: slot === "left" ? 0.5 : 0,
+    velocity: constrain((event.velocity || 0.55) * 0.72, 0.28, 0.46),
+    probability: 1,
+    repeatCount: 1,
+  };
+  let memory = loopMemories.find((item) => item.id === id);
+  if (!memory) {
+    memory = {
+      id,
+      key: "decay",
+      events: [loopEvent],
+      params: { ...layers.decay.params, depth: selectedFilter },
+      pattern: null,
+      savedAt: millis(),
+      cycleCount: 0,
+      maxCycles: Infinity,
+      lastCycleStep: 0,
+      fading: false,
+      background: true,
+      sampleSlot: slot,
+    };
+    loopMemories.push(memory);
+    pruneLoopMemories();
+    visualSystem.createSavedBlock(memory);
+    showInstruction(slot + " sample loop created");
+  } else {
+    memory.events = [loopEvent];
+    memory.params = { ...layers.decay.params, depth: selectedFilter };
+    memory.savedAt = millis();
+    memory.cycleCount = 0;
+    memory.fading = false;
+    showInstruction(slot + " sample loop updated");
+  }
+  visualSystem.createEventParticle({ ...loopEvent, loopMemoryId: memory.id });
+  limitSampleBackgroundMemories();
+}
+
+function limitSampleBackgroundMemories() {
+  const sampleBackgrounds = loopMemories.filter((memory) => memory.key === "decay" && memory.background);
+  while (sampleBackgrounds.length > 5) {
+    const removed = sampleBackgrounds.shift();
+    loopMemories = loopMemories.filter((memory) => memory.id !== removed.id);
+    savedBlocks = savedBlocks.filter((block) => block.id !== removed.id);
+  }
 }
 
 function getIndexPoint(hand) {
@@ -1429,6 +1912,43 @@ function stopAllAudio() {
   }
 }
 
+function resetPerformance() {
+  loopMemories = [];
+  savedBlocks = [];
+  particles = [];
+  pendingAudioEvents = [];
+  pendingSampleLoopEvent = null;
+  lastGestureEvents = {};
+  selectedSampleGridCell = null;
+  selectedSampleGridCells = { left: null, right: null };
+  lastSampleGridCells = { left: null, right: null };
+  resetSampleHandStates();
+  activeMode = null;
+  lastActivatedMode = null;
+  lastActivatedModeAt = 0;
+  activeProcessKey = null;
+  previousProcessKey = null;
+  lastPerformingProcessKey = null;
+  candidateMode = null;
+  candidateModeIsReset = false;
+  dwellProgress = 0;
+  showInstruction("select a sound", 900);
+  if (audioEngine && typeof Tone !== "undefined") {
+    try {
+      audioEngine.stopAll(Tone.now());
+    } catch (error) {
+      console.error(error);
+    }
+  }
+  if (visualSystem) {
+    visualSystem.percussionDots = [];
+    visualSystem.audioObjects = [];
+    visualSystem.sampleHandTrails = { left: [], right: [] };
+    if (visualSystem.clickFluidMask) visualSystem.clickFluidMask.background(0);
+    if (visualSystem.percussionPaintMask) visualSystem.percussionPaintMask.background(0);
+  }
+}
+
 function handlePinchTrigger(rightHand, leftHand) {
   const pinchActive = rightPinchActive;
   if (pinchActive && !leftPinchWasActive) {
@@ -1489,6 +2009,7 @@ function storeGestureLoop(key, event, playImmediately = false) {
     lastCycleStep: 0,
     fading: false,
     background: true,
+    nextPatternUpdateAt: millis() + backgroundPatternUpdateInterval,
   };
 
   if (key === "motion") memory.events = createRegularPercussionEvents(event);
@@ -1502,6 +2023,7 @@ function storeGestureLoop(key, event, playImmediately = false) {
   pruneLoopMemories();
   visualSystem.createSavedBlock(memory);
   visualSystem.createEventParticle({ ...event, loopMemoryId: memory.id });
+  showInstruction(getModeNameForKey(key) + " loop stored");
   if (playImmediately) {
     try {
       playOrQueueGestureEvent(key === "motion" ? { ...event, probability: 1 } : event, 1);
@@ -1545,7 +2067,7 @@ function triggerSelectedSampleLoopMemory(rightHand, leftHand = null) {
 
   const eventGridCell = gridCell !== null ? gridCell : getSampleGridCell(point);
   if (eventGridCell === null) return;
-  const event = createSampleEvent(point, constrain(eventGridCell, 0, samplePaths.length - 1), eventGridCell, 1, handSide);
+  const event = { ...createSampleEvent(point, constrain(eventGridCell, 0, samplePaths.length - 1), eventGridCell, 1, handSide), liveSample: false, loopPlayback: true };
   const memory = {
     id: millis() + "-decay",
     key: "decay",
@@ -1554,10 +2076,10 @@ function triggerSelectedSampleLoopMemory(rightHand, leftHand = null) {
     pattern: null,
     savedAt: millis(),
     cycleCount: 0,
-    maxCycles: loopLifetimeCycles,
+    maxCycles: Infinity,
     lastCycleStep: 0,
     fading: false,
-    background: false,
+    background: true,
   };
 
   loopMemories.push(memory);
@@ -1565,31 +2087,34 @@ function triggerSelectedSampleLoopMemory(rightHand, leftHand = null) {
   visualSystem.createSavedBlock(memory);
   visualSystem.createEventParticle({ ...event, loopMemoryId: memory.id });
   playOrQueueGestureEvent(event, 1);
+  updatePersistentSampleLoop(event, handSide);
+  showInstruction(handSide + " sample loop created");
 }
 
 function toggleSelectedSampleLoop() {
   const gridCell = selectedSampleGridCell !== null ? selectedSampleGridCell : lastSampleGridCell;
   if (gridCell === null) return;
   const point = getSampleGridCellCenter(gridCell);
-  const event = {
-    time: loopManager ? loopManager.step / loopManager.loopLength : (millis() % parameterLoopLength) / parameterLoopLength,
-    type: "sample",
-    note: selectedNote,
-    soundEngine: "decay",
-    filterValue: selectedFilter,
-    velocity: 0.42,
-    duration: "8n",
-    probability: 1,
-    texture: selectedFilter,
-    drift: 0,
-    pan: getPanFromPoint(point),
-    visualX: point.x,
-    visualY: point.y,
-    sampleIndex: constrain(gridCell, 0, samplePaths.length - 1),
-    gridCell,
-    repeatCount: 1,
-  };
-  toggleOrQueueSampleLoop(event, 0.42);
+  const event = { ...createSampleEvent(point, constrain(gridCell, 0, samplePaths.length - 1), gridCell, 1, "right"), liveSample: false, loopPlayback: true };
+  loopMemories.push({
+    id: millis() + "-decay",
+    key: "decay",
+    events: [event],
+    params: { ...layers.decay.params, depth: selectedFilter },
+    pattern: null,
+    savedAt: millis(),
+    cycleCount: 0,
+    maxCycles: Infinity,
+    lastCycleStep: 0,
+    fading: false,
+    background: true,
+  });
+  pruneLoopMemories();
+  visualSystem.createSavedBlock(loopMemories[loopMemories.length - 1]);
+  visualSystem.createEventParticle({ ...event, loopMemoryId: loopMemories[loopMemories.length - 1].id });
+  playOrQueueGestureEvent(event, 1);
+  updatePersistentSampleLoop(event, "right");
+  showInstruction("sample loop created");
 }
 
 function getSampleGridCellCenter(cell) {
@@ -1637,17 +2162,50 @@ function createGestureEvent(engineKey, rightHand, leftHand) {
 
   if (engineKey === "loopCreator") {
     const chord = transposeChordToSelectedHeight(droneChordBank[selectedDroneChordIndex] || droneChordBank[0], selectedNote);
-    return { ...base, type: "chord", chord, inversion: selectedDroneChordIndex % 3, velocitySpread: 0.18 + (layers.loopCreator.params.variation || 0.1) * 0.22, shimmer: layers.loopCreator.params.chance || 0.1 };
+    return {
+      ...base,
+      type: "chord",
+      chord,
+      inversion: selectedDroneChordIndex % 3,
+      velocitySpread: 0.18 + (layers.loopCreator.params.variation || 0.1) * 0.22,
+      shimmer: layers.loopCreator.params.chance || 0.1,
+      instability: layers.loopCreator.target.variation || layers.loopCreator.params.variation || 0.1,
+      space: layers.loopCreator.target.chance || layers.loopCreator.params.chance || 0.1,
+    };
   }
 
   if (engineKey === "motion") {
-    const subdivision = rhythmSubdivisions[floor(constrain(map(percussionSubdivisionValue, 0, 1, 0, rhythmSubdivisions.length), 0, rhythmSubdivisions.length - 0.001))];
-    return { ...base, type: "percussion", subdivision, randomHits: floor(map(percussionDensityValue, 0, 1, 0, 4)), probability: map(percussionDensityValue, 0, 1, 0.12, 0.34), velocity: map(percussionDensityValue, 0, 1, 0.28, 0.54) };
+    const subdivision = rhythmSubdivisions[floor(constrain(map(percussionDensityValue, 0, 1, 0, rhythmSubdivisions.length), 0, rhythmSubdivisions.length - 0.001))];
+    return {
+      ...base,
+      type: "percussion",
+      subdivision,
+      randomHits: floor(map(percussionDensityValue, 0, 1, 1, 10)),
+      probability: map(percussionDensityValue, 0, 1, 0.56, 0.98),
+      velocity: map(percussionPressureValue, 0, 1, 0.58, 0.94),
+      tone: percussionToneValue,
+      noiseMix: percussionNoiseMixValue,
+      pressure: percussionPressureValue,
+      filterValue: percussionPressureValue,
+    };
   }
 
   if (engineKey === "texture") {
     const noteIndex = floor(constrain(map(clickHarmonyValue, 0, 1, 0, fixedScale.length), 0, fixedScale.length - 0.001));
-    return { ...base, type: "clickPattern", distortion: selectedFilter, note: fixedScale[noteIndex], patternType: clickPatternValue, densityValue: clickDensityValue, harmonicRegion: clickHarmonyValue };
+    const heightOffset = floor(map(clickDensityValue, 0, 1, -2, 5));
+    return {
+      ...base,
+      type: "clickPattern",
+      distortion: clickGlitchValue,
+      note: fixedScale[constrain(noteIndex + heightOffset, 0, fixedScale.length - 1)],
+      patternType: clickGlitchValue,
+      densityValue: clickDensityValue,
+      harmonicRegion: clickHarmonyValue,
+      space: clickSpaceValue,
+      filterValue: selectedFilter,
+      probability: constrain(0.72 + clickDensityValue * 0.24, 0.7, 0.98),
+      velocity: constrain(0.62 + clickDensityValue * 0.22, 0.58, 0.9),
+    };
   }
 
   if (engineKey === "decay") {
@@ -1660,7 +2218,7 @@ function createGestureEvent(engineKey, rightHand, leftHand) {
 function transposeChordToSelectedHeight(chord, anchorNote) {
   const targetIndex = droneLowScale.indexOf(anchorNote);
   const safeIndex = targetIndex >= 0 ? targetIndex : getScaleIndex(anchorNote);
-  const octaveShift = floor(map(safeIndex, 0, droneLowScale.length - 1, -1, 0.35));
+  const octaveShift = floor(map(safeIndex, 0, droneLowScale.length - 1, -0.25, 0.75));
   return chord.map((note) => transposeNoteOctaves(note, octaveShift));
 }
 
@@ -1685,9 +2243,12 @@ function createRegularPercussionEvents(source) {
   const events = [];
   const regularCount = source.subdivision;
   const baseIndex = getScaleIndex(source.note);
-  const offsets = [0, 3, 5, 7, 2, 4, 6, 8];
+  const noiseMix = constrain(source.noiseMix || 0, 0, 1);
+  const tone = constrain(source.tone || 0.5, 0, 1);
+  const pressure = constrain(source.pressure || 0.5, 0, 1);
+  const offsets = noiseMix < 0.45 ? [0, 0, 2, 0, 4, 2, 0, 5] : [7, 9, 5, 10, 4, 8, 11, 6];
   for (let i = 0; i < regularCount; i++) {
-    const accent = i % 4 === 0 ? 0.86 : i % 2 === 0 ? 0.58 : 0.38;
+    const accent = i % 4 === 0 ? 1 : i % 2 === 0 ? 0.68 : 0.48;
     const noteIndex = constrain(baseIndex + offsets[i % offsets.length], 0, fixedScale.length - 1);
     events.push({
       ...source,
@@ -1696,8 +2257,11 @@ function createRegularPercussionEvents(source) {
       random: false,
       accent: i % 4 === 0,
       note: fixedScale[noteIndex],
-      filterValue: constrain(source.filterValue + sin(i * 1.7) * 0.08, 0, 1),
-      velocity: constrain(source.velocity * accent, 0.09, 0.58),
+      filterValue: constrain(pressure + sin(i * 1.7) * 0.08, 0, 1),
+      tone: constrain(tone + sin(i * 1.3) * 0.08, 0, 1),
+      noiseMix,
+      pressure,
+      velocity: constrain(source.velocity * accent, 0.18, 0.9),
       pan: constrain((source.pan || 0) + sin(i * 0.73) * 0.28, -0.9, 0.9),
     });
   }
@@ -1714,10 +2278,13 @@ function createRegularPercussionEvents(source) {
       probability: source.probability,
       random: false,
       inBetween: true,
-      harmonicRatio: [1, 1.5, 2, 2.5][i % 4],
+      harmonicRatio: noiseMix < 0.45 ? [0.5, 1, 1.5, 2][i % 4] : [2, 3, 4, 6][i % 4],
       note: fixedScale[constrain(baseIndex + 3 + (i % 4), 0, fixedScale.length - 1)],
-      filterValue: constrain(source.filterValue + 0.08 + sin(i * 2.1) * 0.1, 0, 1),
-      velocity: source.velocity * accent * 0.52,
+      filterValue: constrain(pressure + 0.08 + sin(i * 2.1) * 0.1, 0, 1),
+      tone: constrain(tone + 0.18, 0, 1),
+      noiseMix,
+      pressure,
+      velocity: source.velocity * accent * map(noiseMix, 0, 1, 0.42, 0.9),
       pan: constrain((source.pan || 0) + cos(i * 1.1) * 0.42, -0.9, 0.9),
     });
   }
@@ -1725,29 +2292,33 @@ function createRegularPercussionEvents(source) {
 }
 
 function createClickPatternEvents(source) {
-  const count = floor(map(source.densityValue || clickDensityValue, 0, 1, 2, 9));
+  const glitch = constrain(source.distortion || 0, 0, 1);
+  const space = constrain(source.space || 0, 0, 1);
+  const count = floor(map(source.densityValue || clickDensityValue, 0, 1, 5, 14));
   const events = [];
   const baseIndex = getScaleIndex(source.note);
   const simple = [0, 0.25, 0.5, 0.75];
   const syncopated = [0, 0.1875, 0.375, 0.625, 0.8125];
   const broken = [0, 0.125, 0.3125, 0.4375, 0.6875, 0.875];
-  const shape = (source.patternType || 0) < 0.34 ? simple : (source.patternType || 0) < 0.67 ? syncopated : broken;
-  const offsets = [0, 7, 3, 10, 5, 2, 8, 4, 9, 1, 6, 0];
+  const shape = glitch < 0.3 ? simple : glitch < 0.68 ? syncopated : broken;
+  const offsets = [0, 2, 4, 7, 9, 7, 4, 2, 5, 4, 2, 0];
+  const ratios = glitch < 0.35 ? [1, 1, 1.5, 1, 2, 1.5, 1, 1] : [1, 2, 3, 1.5, 4, 0.5, 2.5, 1];
   for (let i = 0; i < count; i++) {
-    const accent = i % 3 === 0 ? 0.82 : 0.48 + (i % 4) * 0.08;
-    const noteIndex = constrain(baseIndex + offsets[i % offsets.length] - 2, 0, fixedScale.length - 1);
+    const accent = i % 4 === 0 ? 0.88 : 0.46 + (i % 3) * 0.1;
+    const noteIndex = constrain(baseIndex + offsets[i % offsets.length] - 1, 0, fixedScale.length - 1);
     events.push({
       ...source,
       time: (shape[i % shape.length] + floor(i / shape.length)) / ceil(count / shape.length),
       probability: 1,
       note: fixedScale[noteIndex],
-      velocity: source.velocity * accent,
-      filterValue: constrain(source.filterValue + sin(i * 1.37) * 0.18, 0, 1),
-      distortion: constrain(source.distortion * (0.28 + (i % 5) * 0.08), 0, 0.72),
-      harmonicRatio: [1, 1.5, 2, 2.5][i % 4],
-      durationSeconds: 0.012 + (i % 3) * 0.008,
-      noiseAccent: i % 7 === 0 && (source.patternType || 0) > 0.42,
-      pan: constrain((source.pan || 0) + sin(i * 0.91) * 0.5, -0.9, 0.9),
+      velocity: constrain(source.velocity * accent * map(space, 0, 1, 0.92, 1.12), 0.18, 0.92),
+      filterValue: constrain(source.filterValue + sin(i * 1.37) * 0.18 + space * 0.18, 0, 1),
+      distortion: constrain(glitch * (0.36 + (i % 5) * 0.14), 0, 1),
+      space,
+      harmonicRatio: ratios[i % ratios.length],
+      durationSeconds: 0.02 + (i % 4) * 0.014 + space * 0.018,
+      noiseAccent: i % 4 === 0 && glitch > 0.24,
+      pan: constrain((source.pan || 0) + sin(i * 0.91) * map(space, 0, 1, 0.2, 0.75), -0.9, 0.9),
     });
   }
   return events.sort((a, b) => a.time - b.time);

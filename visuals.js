@@ -16,10 +16,12 @@ class VisualSystem {
     this.paintMask = null;
     this.percussionTextMask = null;
     this.percussionPaintMask = null;
+    this.clickFluidMask = null;
     this.maskSize = { width: 0, height: 0 };
     this.lastPaintPoint = null;
     this.lastPercussionPaintPoint = null;
     this.lastPercussionPaintPoints = { left: null, right: null, gesture: null };
+    this.lastClickFluidPoints = { left: null, right: null, gesture: null };
     this.currentFingerPoint = null;
     this.fillProgress = 0;
     this.transitionProgress = 0;
@@ -69,7 +71,14 @@ class VisualSystem {
     } else {
       this.currentFingerPoint = null;
     }
-    if (activeKey === "texture") this.updateClickDiffusion(gesturePoint);
+    if (activeKey === "texture") {
+      this.ensureOneFingerMasks();
+      const hasHands = (typeof bodyLeftWrist !== "undefined" && isFinitePoint(bodyLeftWrist)) || (typeof bodyRightWrist !== "undefined" && isFinitePoint(bodyRightWrist));
+      if (!hasHands) return;
+      this.updateClickFluidPaint(gesturePoint);
+      if (this.clickDiffusionLayer) this.clickDiffusionLayer.clear();
+      if (this.clickDiffusionFeedback) this.clickDiffusionFeedback.clear();
+    }
     if (activeKey === "motion") this.updatePercussionFluidPaint(gesturePoint);
     this.twoFingerPoints = activeKey === "motion" && activeFinger && activeFinger.points ? activeFinger.points : [];
     if (activeKey === "motion" && this.twoFingerStartedAt === null) this.twoFingerStartedAt = millis();
@@ -143,8 +152,6 @@ class VisualSystem {
     this.ensureOneFingerMasks();
     if (activeProcessKey === "motion") {
       this.drawPercussionFluidVisual();
-      const drawn = this.drawStoredPercussionDots();
-      if (!drawn) this.drawTwoFingerEchoes();
       return;
     }
     if (activeProcessKey === "space") {
@@ -153,9 +160,14 @@ class VisualSystem {
       return;
     }
     this.updateOneFingerTransition();
+    if (activeProcessKey === "texture") {
+      this.drawClickFluidVisual();
+      this.drawDottedFluidPattern();
+      return;
+    }
     this.drawReactionDiffusionLayer();
     this.drawDottedFluidPattern();
-    if (activeProcessKey === "texture") this.drawClickDiffusionLayer();
+    if (activeProcessKey === "loopCreator") return;
     const hasCurrentLoopDot = this.percussionDots.some((dot) => dot.key === activeProcessKey);
     if (activeProcessKey === "motion" || hasCurrentLoopDot) {
       const drawn = this.drawStoredPercussionDots();
@@ -175,6 +187,7 @@ class VisualSystem {
     this.paintMask = createGraphics(width, height);
     this.percussionTextMask = createGraphics(width, height);
     this.percussionPaintMask = createGraphics(width, height);
+    this.clickFluidMask = createGraphics(width, height);
     this.clickDiffusionLayer = createGraphics(width, height);
     this.clickDiffusionFeedback = createGraphics(width, height);
     this.leadVhsLayer = createGraphics(width, height);
@@ -185,16 +198,19 @@ class VisualSystem {
     this.paintMask.pixelDensity(1);
     this.percussionTextMask.pixelDensity(1);
     this.percussionPaintMask.pixelDensity(1);
+    this.clickFluidMask.pixelDensity(1);
     this.clickDiffusionLayer.pixelDensity(1);
     this.clickDiffusionFeedback.pixelDensity(1);
     this.leadVhsLayer.pixelDensity(1);
     this.paintMask.background(0);
     this.percussionPaintMask.background(0);
+    this.clickFluidMask.background(0);
     this.clickDiffusionLayer.clear();
     this.clickDiffusionFeedback.clear();
     this.leadVhsLayer.background(0);
     this.textDisplacementMemory.clear();
     this.sampleHandTrails = { left: [], right: [] };
+    this.lastClickFluidPoints = { left: null, right: null, gesture: null };
     this.leadVhsParticles = [];
     this.lastLeadVhsPoint = null;
     this.leadVhsLagPoint = null;
@@ -284,12 +300,12 @@ class VisualSystem {
       const point = item.point;
       const previous = this.lastPercussionPaintPoints[item.key] || point;
       if (dist(point.x, point.y, previous.x, previous.y) > 1) {
-        for (let i = 0; i < 8; i++) {
-          const t = i / 7;
+        for (let i = 0; i < 5; i++) {
+          const t = i / 4;
           this.drawPercussionFluidBrush(lerp(previous.x, point.x, t), lerp(previous.y, point.y, t));
         }
       } else {
-        this.drawPercussionFluidBrush(point.x, point.y);
+        if (frameCount % 3 === 0) this.drawPercussionFluidBrush(point.x, point.y);
       }
       this.lastPercussionPaintPoints[item.key] = { x: point.x, y: point.y };
     }
@@ -301,19 +317,98 @@ class VisualSystem {
     const mask = this.percussionPaintMask;
     if (!mask) return;
     mask.noStroke();
-    for (let i = 0; i < 7; i++) {
+    for (let i = 0; i < 4; i++) {
       const angle = random(TWO_PI);
-      const radius = random(10, 70);
+      const radius = random(8, 46);
       const x = cx + cos(angle) * radius;
       const y = cy + sin(angle) * radius;
-      const w = random(70, 150);
-      const h = random(35, 100);
+      const w = random(38, 96);
+      const h = random(22, 62);
       mask.push();
       mask.translate(x, y);
       mask.rotate(random(TWO_PI));
-      mask.fill(255, 55);
+      mask.fill(255, 36);
       mask.ellipse(0, 0, w, h);
       mask.pop();
+    }
+  }
+
+  updateClickFluidPaint(gesturePoint) {
+    this.ensureOneFingerMasks();
+    const mask = this.clickFluidMask;
+    if (!mask) return;
+    const points = [];
+    if (typeof bodyLeftWrist !== "undefined" && isFinitePoint(bodyLeftWrist)) points.push({ point: bodyLeftWrist, key: "left" });
+    if (typeof bodyRightWrist !== "undefined" && isFinitePoint(bodyRightWrist)) points.push({ point: bodyRightWrist, key: "right" });
+    if (!points.length && isFinitePoint(gesturePoint)) points.push({ point: gesturePoint, key: "gesture" });
+    for (const item of points) {
+      const point = item.point;
+      const previous = this.lastClickFluidPoints[item.key] || point;
+      if (dist(point.x, point.y, previous.x, previous.y) > 1) {
+        for (let i = 0; i < 5; i++) {
+          const t = i / 4;
+          this.drawClickFluidBrush(lerp(previous.x, point.x, t), lerp(previous.y, point.y, t));
+        }
+      } else if (frameCount % 3 === 0) {
+        this.drawClickFluidBrush(point.x, point.y);
+      }
+      this.lastClickFluidPoints[item.key] = { x: point.x, y: point.y };
+    }
+    mask.filter(BLUR, 2);
+    mask.loadPixels();
+  }
+
+  drawClickFluidBrush(cx, cy) {
+    const mask = this.clickFluidMask;
+    if (!mask) return;
+    mask.noStroke();
+    for (let i = 0; i < 5; i++) {
+      const angle = random(TWO_PI);
+      const radius = random(10, 58);
+      const x = cx + cos(angle) * radius;
+      const y = cy + sin(angle) * radius;
+      const w = random(46, 118);
+      const h = random(20, 70);
+      mask.push();
+      mask.translate(x, y);
+      mask.rotate(random(TWO_PI));
+      mask.fill(255, 38);
+      mask.ellipse(0, 0, w, h);
+      mask.pop();
+    }
+  }
+
+  drawClickFluidVisual() {
+    this.ensureOneFingerMasks();
+    const mask = this.clickFluidMask;
+    if (!mask) return;
+    mask.loadPixels();
+    noStroke();
+    const spacing = 5;
+    const dotSize = 2.8;
+    for (let x = 0; x < width; x += spacing) {
+      for (let y = 0; y < height; y += spacing) {
+        const index = 4 * (x + y * width);
+        const paintValue = mask.pixels[index];
+        const insidePaint = paintValue > 28;
+        const ambient = noise(x * 0.012, y * 0.012, frameCount * 0.004);
+        if (!insidePaint && ambient < 0.72) continue;
+
+        const flowA = noise(x * 0.006, y * 0.006, frameCount * 0.002);
+        const flowB = noise(x * 0.014 + 200, y * 0.014 - 100, frameCount * 0.001);
+        const wave = sin(flowA * 75 + flowB * 25 + x * 0.018 + y * 0.006 + frameCount * 0.025);
+        const greyWave = sin(flowA * 60 + flowB * 20 + x * 0.014 - y * 0.01 + frameCount * 0.02);
+        const paintEdge = paintValue > 28 && paintValue < 125;
+        const drawBlackDot = insidePaint ? wave > 0.08 : wave > 0.72;
+        const drawDarkRedDot = insidePaint ? greyWave > 0.02 || paintEdge : greyWave > 0.72;
+        if (drawBlackDot) {
+          fill(0, insidePaint ? 235 : 58);
+          rect(x, y, dotSize, dotSize);
+        } else if (drawDarkRedDot) {
+          fill(45, 0, 0, insidePaint ? 210 : 52);
+          rect(x, y, dotSize * 0.92, dotSize * 0.92);
+        }
+      }
     }
   }
 
@@ -324,41 +419,36 @@ class VisualSystem {
     this.percussionTextMask.loadPixels();
     this.percussionPaintMask.loadPixels();
     noStroke();
-    const spacing = 4;
-    const dotSize = 2.7;
+    const spacing = 5;
+    const dotSize = 2.9;
     for (let x = 0; x < width; x += spacing) {
       for (let y = 0; y < height; y += spacing) {
         const index = 4 * (x + y * width);
         const textValue = this.percussionTextMask.pixels[index];
         const paintValue = this.percussionPaintMask.pixels[index];
-        const paintAmount = paintValue / 255;
         const insideText = textValue > 100;
-        const insidePaint = paintAmount > 0.2;
-        const weakPaint = paintAmount > 0.12 && paintAmount <= 0.2;
-        const blink = (sin(frameCount * 0.12 + x * 0.07 + y * 0.041 + noise(x * 0.03, y * 0.03) * 9) + 1) * 0.5;
-        const blinkingWeakPaint = weakPaint && blink > 0.38;
+        const insidePaint = paintValue > 35;
         const textWasTouched = insideText && insidePaint;
-        const visibleShape = insidePaint || blinkingWeakPaint || (insideText && !textWasTouched);
+        const visibleShape = insidePaint || (insideText && !textWasTouched);
         if (!visibleShape) continue;
 
-        const packed = this.applyPercussionPacking(x, y);
         const flowA = noise(x * 0.006, y * 0.006, frameCount * 0.002);
         const flowB = noise(x * 0.014 + 200, y * 0.014 - 100, frameCount * 0.001);
         const wave = sin(flowA * 75 + flowB * 25 + x * 0.018 + y * 0.006 + frameCount * 0.025);
         const greyWave = sin(flowA * 60 + flowB * 20 + x * 0.014 - y * 0.01 + frameCount * 0.02);
-        const paintEdge = paintAmount > 0.2 && paintAmount < 0.5;
+        const paintEdge = paintValue > 35 && paintValue < 125;
         const drawBlackDot = wave > 0.18;
-        const drawGreyDot = greyWave > 0.05 || paintEdge || blinkingWeakPaint;
+        const drawGreyDot = greyWave > 0.05 || paintEdge;
 
         if (insideText && !insidePaint) {
           fill(0);
-          circle(packed.x, packed.y, dotSize);
+          circle(x, y, dotSize);
         } else if (drawBlackDot) {
-          fill(0, blinkingWeakPaint ? 95 + blink * 110 : 255);
-          circle(packed.x, packed.y, blinkingWeakPaint ? dotSize * 0.72 : dotSize);
+          fill(0);
+          circle(x, y, dotSize);
         } else if (drawGreyDot) {
-          fill(150, blinkingWeakPaint ? 75 + blink * 120 : 255);
-          circle(packed.x, packed.y, blinkingWeakPaint ? dotSize * 0.62 : dotSize * 0.95);
+          fill(150);
+          circle(x, y, dotSize * 0.95);
         }
       }
     }
@@ -469,6 +559,10 @@ class VisualSystem {
       background(20, 64, 210);
       return;
     }
+    if (activeProcessKey === "loopCreator") {
+      background(0, 38);
+      return;
+    }
     const baseBg = lerp(255, 0, this.transitionProgress);
     const redBg = color(220, 24, 24);
     const fourBg = color(0);
@@ -496,13 +590,16 @@ class VisualSystem {
     this.paintMask.loadPixels();
     noStroke();
 
-    for (let x = 0; x < width; x += this.spacing) {
-      for (let y = 0; y < height; y += this.spacing) {
+    const isOpeningPrompt = !activeProcessKey && this.transitionProgress < 0.08 && this.threePromptProgress < 0.08;
+    const spacing = isOpeningPrompt ? 4 : this.spacing;
+    for (let x = 0; x < width; x += spacing) {
+      for (let y = 0; y < height; y += spacing) {
         const index = 4 * (x + y * width);
         const textValue = this.textMask.pixels[index];
         const nextTextValue = this.nextTextMask.pixels[index];
         const paintValue = this.paintMask.pixels[index];
         const insideText = textValue > 100;
+        const nearOpeningText = isOpeningPrompt && !insideText && this.isNearMaskPixel(this.textMask, x, y, 14);
         const insideNextText = nextTextValue > 100;
         const insidePaint = paintValue > 35;
         const textWasTouched = insideText && insidePaint;
@@ -510,9 +607,19 @@ class VisualSystem {
         const nextTextAlpha = 1 - statementAlpha;
         const showNextText = insideNextText && this.transitionProgress > 0.02 && nextTextAlpha > 0.03;
         const previousAlpha = (1 - this.threePromptProgress * 0.32) * nextTextAlpha;
-        const visibleShape = insidePaint || (insideText && !textWasTouched) || showNextText;
+        const visibleShape = insidePaint || (insideText && !textWasTouched) || showNextText || nearOpeningText;
         if (!visibleShape) continue;
-        const displaced = this.applyHandTextDisplacement(this.applyPercussionPacking(x, y));
+        const displaced = this.applyHandTextDisplacement({ x, y });
+        if (nearOpeningText) {
+          const haze = noise(x * 0.08 + 31, y * 0.08 - 17, frameCount * 0.018);
+          if (haze < 0.54) continue;
+          const alpha = map(haze, 0.54, 1, 20, 105) * previousAlpha;
+          fill(0, alpha);
+          const offsetX = (noise(x * 0.06, y * 0.06, frameCount * 0.03) - 0.5) * 9;
+          const offsetY = (noise(x * 0.06 + 8, y * 0.06, frameCount * 0.03) - 0.5) * 7;
+          rect(displaced.x + offsetX, displaced.y + offsetY, random([1, 1, 2, 3]), random([1, 2, 2, 3]));
+          continue;
+        }
         if (showNextText) {
           const nextColor = this.getModeDotColor("next");
           fill(nextColor[0], nextColor[1], nextColor[2], 255 * previousAlpha);
@@ -521,8 +628,27 @@ class VisualSystem {
         }
         if (insideText && !insidePaint) {
           const textColor = this.getModeDotColor("text");
-          fill(textColor[0], textColor[1], textColor[2], 255 * (1 - this.transitionProgress) * previousAlpha);
-          circle(displaced.x, displaced.y, this.dotSize);
+          if (isOpeningPrompt) {
+            const flowA = noise(x * 0.006, y * 0.006, frameCount * 0.002);
+            const flowB = noise(x * 0.014 + 200, y * 0.014 - 100, frameCount * 0.001);
+            const wave = sin(flowA * 75 + flowB * 25 + x * 0.018 + y * 0.006 + frameCount * 0.025);
+            const greyWave = sin(flowA * 60 + flowB * 20 + x * 0.014 - y * 0.01 + frameCount * 0.02);
+            const sparkle = (sin(frameCount * 0.19 + x * 0.3 + y * 0.19 + flowA * 11) + 1) * 0.5;
+            if (wave <= -0.18 && greyWave <= 0.05 && sparkle < 0.92) continue;
+            const isBrightSpark = sparkle > 0.92 || noise(x * 0.12 + 5, y * 0.12 - 9, frameCount * 0.035) > 0.86;
+            const dotAlpha = 255 * previousAlpha * map(sparkle, 0, 1, 0.5, 1);
+            const grey = greyWave > 0.05 && wave <= 0.18 ? 118 : 0;
+            fill(grey, dotAlpha);
+            const size = isBrightSpark ? random([3, 4, 5]) : map(wave, -0.18, 1, 1.2, 3.15);
+            rect(displaced.x, displaced.y, size, size);
+            if (isBrightSpark && random() < 0.18) {
+              fill(0, 210 * previousAlpha);
+              rect(displaced.x + random([-5, 0, 5]), displaced.y + random([-5, 0, 5]), size * 1.45, size * 1.45);
+            }
+          } else {
+            fill(textColor[0], textColor[1], textColor[2], 255 * (1 - this.transitionProgress) * previousAlpha);
+            rect(displaced.x, displaced.y, this.dotSize, this.dotSize);
+          }
           continue;
         }
 
@@ -549,6 +675,7 @@ class VisualSystem {
   }
 
   getModeDotColor(kind) {
+    if (activeProcessKey === "loopCreator") return kind === "grey" ? [130, 130, 130] : [255, 255, 255];
     if (activeProcessKey === "texture") return kind === "grey" ? [45, 0, 0] : [0, 0, 0];
     if (activeProcessKey === "space") return [255, 214, 26];
     const v = kind === "grey" ? lerp(150, 105, this.transitionProgress) : lerp(0, 255, this.transitionProgress);
@@ -741,14 +868,33 @@ class VisualSystem {
         angle: random(TWO_PI),
         size: random(3, 14),
         orbitRadius: random(18, 86),
+        speedScale: random(0.45, 1.7),
+        handBias: random() < 0.5 ? "left" : "right",
       });
     }
   }
 
   getLeadVhsTarget() {
+    if (typeof bodyRightWrist !== "undefined" && isFinitePoint(bodyRightWrist) && typeof bodyLeftWrist !== "undefined" && isFinitePoint(bodyLeftWrist)) {
+      return { x: (bodyRightWrist.x + bodyLeftWrist.x) * 0.5, y: (bodyRightWrist.y + bodyLeftWrist.y) * 0.5 };
+    }
     if (typeof bodyRightWrist !== "undefined" && isFinitePoint(bodyRightWrist)) return bodyRightWrist;
     if (typeof bodyLeftWrist !== "undefined" && isFinitePoint(bodyLeftWrist)) return bodyLeftWrist;
     return this.lastLeadVhsPoint || { x: width / 2, y: height / 2 };
+  }
+
+  getLeadHands() {
+    const hands = [];
+    if (typeof bodyLeftWrist !== "undefined" && isFinitePoint(bodyLeftWrist)) hands.push({ side: "left", point: bodyLeftWrist });
+    if (typeof bodyRightWrist !== "undefined" && isFinitePoint(bodyRightWrist)) hands.push({ side: "right", point: bodyRightWrist });
+    return hands;
+  }
+
+  getLeadParticleTarget(particle, fallback) {
+    const hands = this.getLeadHands();
+    const preferred = hands.find((hand) => hand.side === particle.handBias);
+    if (preferred) return preferred.point;
+    return hands.length ? hands[0].point : fallback;
   }
 
   drawLeadVhsVisual() {
@@ -767,45 +913,45 @@ class VisualSystem {
     while (this.leadVhsTrail.length > 42) this.leadVhsTrail.shift();
     const fluidTarget = this.leadVhsLagPoint;
 
-    const feedback = 0.86;
-    const blurAmount = 2;
     const redShift = 6 + constrain(handSpeed * 0.06, 0, 8);
     const speed = 0.72 + constrain(handSpeed * 0.01, 0, 1.25);
-    const distortion = 8 + constrain(handSpeed * 0.24, 0, 34);
-    const vhsNoise = 0.24 + constrain(handSpeed * 0.007, 0, 0.28);
+    const vhsNoise = 0.16 + constrain(handSpeed * 0.004, 0, 0.16);
 
     pg.push();
     pg.noStroke();
-    pg.fill(0, 0, 0, 255 * (1 - feedback));
+    pg.blendMode(BLEND);
+    pg.fill(0, 0, 0, 54);
     pg.rect(0, 0, width, height);
-    pg.tint(255, 30);
-    pg.image(pg, -blurAmount, -blurAmount, width + blurAmount * 2, height + blurAmount * 2);
-    pg.noTint();
     pg.blendMode(ADD);
-    this.drawLeadSoftField(pg, fluidTarget, redShift);
+    const leadHands = this.getLeadHands();
+    this.drawLeadReactionDiffusion(pg, leadHands.length ? leadHands.map((hand) => hand.point) : [fluidTarget], redShift);
+    this.drawLeadSoftField(pg, leadHands.length ? leadHands.map((hand) => hand.point) : [fluidTarget], redShift);
     this.drawLeadDelayedTraces(pg, redShift);
     this.drawLeadDragTrail(pg, previous, target, redShift);
     for (const particle of this.leadVhsParticles) {
-      this.updateLeadVhsParticle(particle, fluidTarget, speed);
-      this.drawLeadVhsParticle(pg, particle, fluidTarget, redShift);
+      const particleTarget = this.getLeadParticleTarget(particle, fluidTarget);
+      this.updateLeadVhsParticle(particle, particleTarget, speed * particle.speedScale);
+      this.drawLeadVhsParticle(pg, particle, particleTarget, redShift);
     }
     pg.blendMode(BLEND);
     pg.pop();
 
-    this.renderLeadVhsRedshift(pg, fluidTarget, redShift, distortion, vhsNoise);
+    background(0);
+    image(pg, 0, 0);
+    this.drawLeadVhsNoise(vhsNoise);
   }
 
-  drawLeadSoftField(g, target, redShift) {
-    const cell = 84;
+  drawLeadSoftField(g, targets, redShift) {
+    const cell = 66;
     for (let y = cell / 2; y < height; y += cell) {
       for (let x = cell / 2; x < width; x += cell) {
-        const d = dist(x, y, target.x, target.y);
+        const d = targets.reduce((closest, target) => min(closest, dist(x, y, target.x, target.y)), Infinity);
         const influence = map(constrain(d, 0, 250), 250, 0, 0, 1);
         const n = noise(x * 0.004, y * 0.004, frameCount * 0.01);
         const pulse = sin(frameCount * 0.03 + x * 0.01 + y * 0.01) * 0.5 + 0.5;
-        if (influence + n * 0.28 <= 0.62) continue;
-        const s = cell * (0.06 + influence * 0.12 + pulse * 0.055);
-        const a = 4 + influence * 18;
+        if (influence + n * 0.3 <= 0.58) continue;
+        const s = cell * (0.035 + influence * 0.08 + pulse * 0.04);
+        const a = 3 + influence * 13;
         g.noStroke();
         g.fill(255, 30, 15, a * 0.7);
         g.circle(x, y, s);
@@ -813,6 +959,32 @@ class VisualSystem {
         g.circle(x, y, s * 2.2);
         g.fill(70, 220, 255, a * 0.18);
         g.circle(x - redShift * 1.4, y, s * 1.3);
+      }
+    }
+  }
+
+  drawLeadReactionDiffusion(g, targets, redShift) {
+    const step = 11;
+    const top = typeof performanceTop !== "undefined" ? performanceTop : 0;
+    g.noStroke();
+    for (let y = top; y < height; y += step) {
+      for (let x = 0; x < width; x += step) {
+        let field = 0;
+        for (const target of targets) {
+          const d = dist(x, y, target.x, target.y);
+          field += pow(1 - constrain(d / 210, 0, 1), 2.2);
+        }
+        const n = noise(x * 0.035, y * 0.035, frameCount * 0.018);
+        const reaction = abs(sin((field * 4.2 + n * 2.1 + frameCount * 0.018) * PI));
+        if (field < 0.04 || reaction < 0.64) continue;
+        const size = map(constrain(field, 0, 1.35), 0, 1.35, 1.2, 5.8) * map(reaction, 0.64, 1, 0.5, 1.25);
+        const jitter = (noise(x * 0.08 + 4, y * 0.08 - 3, frameCount * 0.03) - 0.5) * 8;
+        g.fill(255, 42, 18, 14 + field * 34);
+        g.rect(x + jitter, y - jitter * 0.25, size, size);
+        if (reaction > 0.88) {
+          g.fill(70, 220, 255, 10 + field * 20);
+          g.rect(x - redShift + jitter * 0.2, y + jitter * 0.35, size * 0.7, size * 0.7);
+        }
       }
     }
   }
@@ -949,12 +1121,6 @@ class VisualSystem {
 
   drawLeadVhsNoise(vhsNoise) {
     push();
-    if (random() < 0.2 * vhsNoise) {
-      const y = random(height);
-      const h = random(5, 28);
-      const shift = random(-90, 90) * vhsNoise;
-      copy(0, y, width, h, shift, y + random(-8, 8), width, h);
-    }
     noStroke();
     for (let i = 0; i < 14 * vhsNoise; i++) {
       const y = floor(random(height) / 6) * 6;
@@ -991,7 +1157,7 @@ class VisualSystem {
 
   getHandContrastColor(side) {
     if (activeProcessKey === "space") return [255, 36, 30];
-    if (activeProcessKey === "texture") return side === "left" ? [35, 112, 255] : [255, 255, 255];
+    if (activeProcessKey === "texture") return side === "left" ? [35, 112, 255] : [0, 0, 0];
     return side === "left" ? [35, 112, 255] : [255, 214, 26];
   }
 
@@ -1055,9 +1221,9 @@ class VisualSystem {
 
   getLoopDotSettings(key) {
     if (key === "loopCreator") return { color: [255, 228, 92], radius: 36 };
-    if (key === "texture") return { color: [255, 255, 255], radius: 48 };
+    if (key === "texture") return { color: [0, 0, 0], radius: 48 };
     if (key === "space") return { color: [255, 36, 30], radius: 46 };
-    return { color: [35, 112, 255], radius: 42 };
+    return { color: [255, 36, 30], radius: 42 };
   }
 
   drawStoredPercussionDots() {
@@ -1183,6 +1349,7 @@ class VisualSystem {
       rect(0, top, width, height - top);
     }
 
+    this.drawSampleHandTrackingEffect(top);
   }
 
   drawIrregularSampleCell(cell, isActive, isLooping) {
@@ -1190,26 +1357,24 @@ class VisualSystem {
     const isSampleCell = cell.sampleIndex !== null && cell.sampleIndex !== undefined;
     if (!isSampleCell) return;
 
-    const gap = 1.15;
-    const activeAlpha = isActive ? 34 + pulse * 24 : 0;
-    const loopAlpha = isLooping ? 34 + this.globalAmp * 36 : 0;
+    const gap = 0.35;
+    const activeAlpha = isActive ? 120 + pulse * 46 : 0;
+    const loopAlpha = isLooping ? 54 + this.globalAmp * 50 : 0;
     noStroke();
     fill(0);
     rect(cell.x + gap, cell.y + gap, cell.w - gap * 2, cell.h - gap * 2);
     if (isActive) {
-      fill(255, 255, 255, activeAlpha);
+      fill(210, 28, 24, activeAlpha);
       rect(cell.x + gap, cell.y + gap, cell.w - gap * 2, cell.h - gap * 2);
     }
     if (isLooping) {
-      fill(210, 226, 255, loopAlpha);
+      fill(210, 28, 24, loopAlpha);
       rect(cell.x + gap, cell.y + gap, cell.w - gap * 2, cell.h - gap * 2);
     }
 
-    this.drawRecursiveSampleSquares(cell, isActive, isLooping);
-
     noFill();
-    stroke(isLooping ? color(210, 226, 255, 235) : isActive ? color(255, 255, 255, 245) : color(238, 238, 236, 210));
-    strokeWeight(isActive || isLooping ? 1.65 : 0.9);
+    stroke(isLooping || isActive ? color(255, 80, 72, 230) : color(238, 238, 236, 168));
+    strokeWeight(0.075);
     rect(cell.x + gap, cell.y + gap, cell.w - gap * 2, cell.h - gap * 2);
 
   }
@@ -1305,7 +1470,7 @@ class VisualSystem {
       const previous = trail.length ? trail[trail.length - 1] : null;
       const speed = previous ? dist(hand.point.x, hand.point.y, previous.x, previous.y) : 0;
       trail.push({ x: hand.point.x, y: hand.point.y, speed, life: 1, seed: noise(hand.point.x * 0.01, hand.point.y * 0.01, frameCount * 0.01) * 1000 });
-      while (trail.length > 28) trail.shift();
+      while (trail.length > 18) trail.shift();
       this.sampleHandTrails[hand.side] = trail;
       this.drawCableHandTrail(trail, hand.color, hand.phase);
       this.drawCableHandCore(hand.point, hand.color, speed, hand.phase);
@@ -1317,14 +1482,14 @@ class VisualSystem {
     noFill();
     blendMode(ADD);
     for (let pass = 0; pass < 3; pass++) {
-      const alpha = 34 - pass * 8;
+      const alpha = 28 - pass * 7;
       stroke(rgb[0], rgb[1], rgb[2], alpha);
-      strokeWeight(0.8 + pass * 0.42);
+      strokeWeight(0.7 + pass * 0.36);
       beginShape();
       for (let i = 0; i < trail.length; i++) {
         const p = trail[i];
         const age = i / max(1, trail.length - 1);
-        const wobble = (noise(p.x * 0.016 + pass, p.y * 0.016 - phase, frameCount * 0.02) - 0.5) * (18 + p.speed * 0.22) * age;
+        const wobble = (noise(p.x * 0.014 + pass, p.y * 0.014 - phase, frameCount * 0.022) - 0.5) * (34 + p.speed * 0.34) * age;
         const angle = noise(p.seed, pass, frameCount * 0.015) * TWO_PI;
         curveVertex(p.x + cos(angle) * wobble, p.y + sin(angle) * wobble);
       }
@@ -1335,8 +1500,8 @@ class VisualSystem {
       const p = trail[i];
       const age = i / max(1, trail.length - 1);
       const blink = (sin(frameCount * 0.2 + p.seed + phase) + 1) * 0.5;
-      fill(rgb[0], rgb[1], rgb[2], 18 + age * 88 * blink);
-      circle(p.x, p.y, 1.2 + age * 3.8 + p.speed * 0.012);
+      fill(rgb[0], rgb[1], rgb[2], 12 + age * 72 * blink);
+      rect(p.x + random(-10, 10) * age, p.y + random(-10, 10) * age, 1 + age * 3.8 + p.speed * 0.012, 1 + age * 3.8 + p.speed * 0.012);
     }
     blendMode(BLEND);
   }
@@ -1345,9 +1510,9 @@ class VisualSystem {
     blendMode(ADD);
     noFill();
     const intensity = constrain(map(speed, 0, 34, 0.72, 1.45), 0.72, 1.45);
-    for (let ring = 0; ring < 8; ring++) {
-      const radius = (10 + ring * 7.5 + sin(frameCount * 0.08 + ring + phase) * 2.5) * intensity;
-      const alpha = (94 - ring * 9) * intensity;
+    for (let ring = 0; ring < 4; ring++) {
+      const radius = (10 + ring * 8 + sin(frameCount * 0.08 + ring + phase) * 2) * intensity;
+      const alpha = (50 - ring * 8) * intensity;
       stroke(rgb[0], rgb[1], rgb[2], alpha);
       strokeWeight(1.4 - ring * 0.08);
       beginShape();
