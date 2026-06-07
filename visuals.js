@@ -48,6 +48,9 @@ class VisualSystem {
     this.lastLeadVhsPoint = null;
     this.leadVhsLagPoint = null;
     this.leadVhsTrail = [];
+    this.openingSliceMask = null;
+    this.openingSlices = [];
+    this.openingSliceKey = "";
   }
 
   update(activeKey, layerState, analysis, gesturePoint, activeFinger) {
@@ -160,12 +163,17 @@ class VisualSystem {
       return;
     }
     this.updateOneFingerTransition();
+    if (this.isOpeningSlicePrompt()) {
+      this.drawOpeningSlicePrompt();
+      return;
+    }
     if (activeProcessKey === "texture") {
       this.drawClickFluidVisual();
       this.drawDottedFluidPattern();
       return;
     }
     this.drawReactionDiffusionLayer();
+    this.drawOpeningPromptAnimation();
     this.drawDottedFluidPattern();
     if (activeProcessKey === "loopCreator") return;
     const hasCurrentLoopDot = this.percussionDots.some((dot) => dot.key === activeProcessKey);
@@ -230,7 +238,7 @@ class VisualSystem {
     this.threePromptProgress = 0;
     this.fourPromptProgress = 0;
     this.stageLevel = 1;
-    this.drawStatementTextMask(this.textMask, "choose a", "box above");
+    this.drawStatementTextMask(this.textMask, "select a", "sound above");
     this.drawStatementTextMask(this.nextTextMask, "russia is a", "terrorist state");
     this.drawStatementTextMask(this.threeTextMask, "russia is a", "terrorist state");
     this.drawStatementTextMask(this.fourTextMask, "russia is a", "terrorist state");
@@ -582,6 +590,181 @@ class VisualSystem {
       }
     }
     return total ? filled / total : 0;
+  }
+
+  isOpeningSlicePrompt() {
+    return !activeProcessKey && this.transitionProgress < 0.08 && this.threePromptProgress < 0.08;
+  }
+
+  ensureOpeningSlices() {
+    const key = width + "x" + height;
+    if (this.openingSliceKey === key && this.openingSlices.length && this.openingSliceMask) return;
+    this.openingSliceKey = key;
+    this.openingSlices = [];
+    this.openingSliceMask = createGraphics(width, height);
+    this.openingSliceMask.pixelDensity(1);
+    const pg = this.openingSliceMask;
+    pg.background(0);
+    pg.fill(255);
+    pg.noStroke();
+    pg.textAlign(CENTER, CENTER);
+    pg.textStyle(BOLD);
+    pg.textFont("Arial Black");
+    const phrase = "SELECT A SOUND";
+    let fontSize = min(width * 0.23, height * 0.42, 132);
+    pg.textSize(fontSize);
+    while (pg.textWidth(phrase) > width * 0.97 && fontSize > 12) {
+      fontSize *= 0.97;
+      pg.textSize(fontSize);
+    }
+    pg.text(phrase, width / 2, height / 2 + height * 0.03);
+    pg.loadPixels();
+
+    const sliceW = max(2, floor(width / 170));
+    const sliceGap = max(1, floor(sliceW * 0.45));
+    const sampleStep = max(3, floor(height / 72));
+    const maxOffset = height * 0.28;
+
+    for (let x = 0; x < width; x += sliceW + sliceGap) {
+      let inRun = false;
+      let runStart = 0;
+      for (let y = performanceTop; y < height; y += sampleStep) {
+        const filled = this.openingColumnHasText(x, y, sliceW);
+        if (filled && !inRun) {
+          inRun = true;
+          runStart = y;
+        }
+        if (!filled && inRun) {
+          inRun = false;
+          const runEnd = y;
+          if (runEnd - runStart > 5) this.addOpeningSlice(x, runStart, sliceW, runEnd - runStart, maxOffset);
+        }
+      }
+      if (inRun) {
+        const runEnd = height;
+        if (runEnd - runStart > 5) this.addOpeningSlice(x, runStart, sliceW, runEnd - runStart, maxOffset);
+      }
+    }
+  }
+
+  addOpeningSlice(x, y, w, h, maxOffset) {
+    this.openingSlices.push({
+      x,
+      y,
+      w,
+      h,
+      dir: random() < 0.5 ? -1 : 1,
+      amp: random(maxOffset * 0.45, maxOffset),
+      phase: random(TWO_PI),
+      jitter: random(1000),
+    });
+  }
+
+  openingColumnHasText(x, y, sliceW) {
+    if (!this.openingSliceMask || !this.openingSliceMask.pixels) return false;
+    const step = max(1, floor(sliceW / 3));
+    for (let dx = 0; dx < sliceW; dx += step) {
+      const sx = constrain(floor(x + dx), 0, width - 1);
+      const sy = constrain(floor(y), 0, height - 1);
+      const idx = 4 * (sy * width + sx);
+      if (this.openingSliceMask.pixels[idx] > 120) return true;
+    }
+    return false;
+  }
+
+  getOpeningInfluencePoints() {
+    const points = [];
+    if (typeof bodyLeftWrist !== "undefined" && isFinitePoint(bodyLeftWrist)) points.push(bodyLeftWrist);
+    if (typeof bodyRightWrist !== "undefined" && isFinitePoint(bodyRightWrist)) points.push(bodyRightWrist);
+    if (!points.length && typeof mouseX !== "undefined" && mouseX >= 0 && mouseX <= width && mouseY >= 0 && mouseY <= height) {
+      points.push({ x: mouseX, y: mouseY });
+    }
+    return points;
+  }
+
+  drawOpeningSlicePrompt() {
+    this.ensureOpeningSlices();
+    background(0);
+    const hoverRadius = min(width, height) * 0.34;
+    const hands = this.getOpeningInfluencePoints();
+    noStroke();
+    fill(255);
+    for (const s of this.openingSlices) {
+      const cx = s.x + s.w * 0.5;
+      const cy = s.y + s.h * 0.5;
+      let influence = 0;
+      for (const hand of hands) {
+        const d = dist(hand.x, hand.y, cx, cy);
+        if (d >= hoverRadius) continue;
+        influence = max(influence, pow(map(d, 0, hoverRadius, 1, 0), 1.8));
+      }
+      const idle = sin(frameCount * 0.035 + s.phase) * 0.08;
+      const wave = sin(frameCount * 0.12 + s.phase);
+      const rawYOffset = wave * s.amp * (influence + idle) * s.dir;
+      const minOffset = performanceTop + 2 - s.y;
+      const maxOffset = height - 2 - (s.y + s.h);
+      const yOffset = constrain(rawYOffset, minOffset, maxOffset);
+      const rawX = s.x + (noise(s.jitter, frameCount * 0.035) - 0.5) * 3 * influence;
+      const x = constrain(rawX, 2, width - s.w - 2);
+      const y = constrain(s.y + yOffset, performanceTop + 2, height - s.h - 2);
+      const alpha = 215 + influence * 40 + noise(s.jitter + 8, frameCount * 0.02) * 24;
+      fill(255, constrain(alpha, 180, 255));
+      rect(x, y, s.w, s.h, 1.5);
+    }
+  }
+
+  drawOpeningPromptAnimation() {
+    const isOpeningPrompt = !activeProcessKey && this.transitionProgress < 0.08 && this.threePromptProgress < 0.08;
+    if (!isOpeningPrompt || !this.textMask) return;
+    this.textMask.loadPixels();
+
+    blendMode(MULTIPLY);
+    noStroke();
+    const t = frameCount;
+
+    for (let y = performanceTop + 12; y < height - 8; y += 5) {
+      const rowFlow = noise(y * 0.018, t * 0.012);
+      const rowShift = (rowFlow - 0.5) * 34;
+      for (let x = 4; x < width - 4; x += 5) {
+        const index = 4 * (floor(x) + floor(y) * width);
+        const insideText = this.textMask.pixels[index] > 100;
+        const nearText = !insideText && this.isNearMaskPixel(this.textMask, x, y, 30);
+        const ambient = noise(x * 0.018 + 40, y * 0.028 - 20, t * 0.01);
+        if (!insideText && !nearText && ambient < 0.84) continue;
+
+        const wave = sin(x * 0.035 + y * 0.014 + t * 0.06 + rowFlow * 8);
+        const shimmer = noise(x * 0.08 + t * 0.035, y * 0.08);
+        if (!insideText && nearText && wave < -0.2 && shimmer < 0.48) continue;
+
+        const px = x + rowShift * (nearText ? 0.62 : 0.28) + (noise(x * 0.04, y * 0.04, t * 0.025) - 0.5) * 10;
+        const py = y + (noise(x * 0.025 + 7, y * 0.025, t * 0.018) - 0.5) * 8;
+        const alpha = insideText ? 16 + shimmer * 34 : nearText ? 10 + shimmer * 54 : 6 + shimmer * 18;
+        const size = insideText ? random([1, 1, 2]) : nearText ? random([1, 2, 3, 4]) : 1;
+        fill(0, alpha);
+        rect(px, py, size + max(0, wave) * 5, size);
+      }
+    }
+
+    for (let i = 0; i < 12; i++) {
+      const stripY = performanceTop + noise(i * 12.7, t * 0.018) * (height - performanceTop - 22);
+      const stripW = noise(i * 8.9, t * 0.021) * width * 0.42;
+      const stripX = width * 0.5 - stripW * 0.5 + (noise(i * 17.1, t * 0.026) - 0.5) * width * 0.3;
+      const stripH = random([1, 1, 2, 3]);
+      fill(0, 10 + noise(i, t * 0.03) * 34);
+      rect(stripX, stripY, stripW, stripH);
+    }
+
+    for (let i = 0; i < 90; i++) {
+      const a = noise(i * 0.2, t * 0.008) * TWO_PI * 2;
+      const r = noise(i * 0.31 + 10, t * 0.01) * min(width, height) * 0.52;
+      const x = width * 0.5 + cos(a) * r + (noise(i, t * 0.02) - 0.5) * 42;
+      const y = height * 0.52 + sin(a) * r * 0.58;
+      if (!this.isNearMaskPixel(this.textMask, x, y, 52) && random() < 0.7) continue;
+      const blink = noise(i * 1.7, t * 0.07);
+      fill(0, map(blink, 0, 1, 8, 96));
+      rect(x, y, random([1, 1, 2, 3]), random([1, 2, 3]));
+    }
+    blendMode(BLEND);
   }
 
   drawDottedFluidPattern() {

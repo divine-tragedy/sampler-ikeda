@@ -265,7 +265,7 @@ function preload() {
 }
 
 function setup() {
-  createCanvas(448, 257);
+  createCanvas(windowWidth, windowHeight);
   pixelDensity(1);
   frameRate(30);
   textFont("monospace");
@@ -303,6 +303,12 @@ function setup() {
     systemMessage = "audio setup paused until interaction";
     console.error(error);
   }
+}
+
+function windowResized() {
+  resizeCanvas(windowWidth, windowHeight);
+  if (video) video.size(width, height);
+  if (visualSystem) visualSystem.maskSize = { width: 0, height: 0 };
 }
 
 function draw() {
