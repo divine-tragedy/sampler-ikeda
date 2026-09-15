@@ -3,7 +3,7 @@ class VisualSystem {
     this.state = {
       colorMix: 0,
       pixelDust: 0.12,
-      drift: 0.05,
+      drift: 0.04,
       space: 0.1,
       decay: 0.08,
     };
